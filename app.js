@@ -112,15 +112,9 @@ async function dbDelete(id){
 /* ---------------- PARSERS ---------------- */
 async function parsePDF(arrayBuffer){
   const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
-  let fullText = "";
-  
-  // Parcourir toutes les pages au cas où le tableau est long
-  for(let p=1; p<=pdf.numPages; p++) {
-    const page = await pdf.getPage(p);
-    const content = await page.getTextContent();
-    fullText += content.items.map(i=>i.str).join(' ') + " ";
-  }
-  const text = fullText.replace(/\s+/g,' ');
+  const page = await pdf.getPage(1);
+  const content = await page.getTextContent();
+  const text = content.items.map(i=>i.str).join(' ').replace(/\s+/g,' ');
 
   const get=(re)=>{ const m=text.match(re); return m? m[1].trim() : null; };
   const cable     = get(/Nom Câble\s*:\s*(.*?)\s*Nom Fibre/);
@@ -128,27 +122,14 @@ async function parsePDF(arrayBuffer){
   const origine   = get(/Origine\s*:\s*(.*?)\s*Extrémité/);
   const extremite = get(/Extrémité\s*:\s*(.*?)\s*(?:Réf|Opérateur|$)/);
 
-  // Parseur robuste pour la ligne résumé (indépendant de la mise en page "Liaison dB")
   let laser=null, bilanTotal=null, orl=null, finFibre=null, nbEvt=null;
-  
-  // Extraction directe par motifs numériques isolés autour des noms d'origine/extrémité
-  const numericPattern = new RegExp(`(\\d{4})\\s+([\\d.]+)\\s+([\\d.]+)\\s+(?:Liaison\\s+dB\\s+)?([\\d.]+)`);
-  const matchNumbers = text.match(numericPattern);
-  if(matchNumbers) {
-    laser = +matchNumbers[1];
-    bilanTotal = +matchNumbers[2];
-    orl = +matchNumbers[3];
-    finFibre = +matchNumbers[4];
+  if(origine && extremite){
+    const re = new RegExp('(\\d+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+'+escapeRegex(origine)+'\\s*->\\s*'+escapeRegex(extremite)+'\\s+(\\d+)');
+    const m = text.match(re);
+    if(m){ laser=+m[1]; bilanTotal=+m[2]; orl=+m[3]; finFibre=+m[4]; nbEvt=+m[5]; }
   }
 
-  // Extraction du nombre d'événements à la fin de la chaîne directionnelle
-  if(origine && extremite) {
-    const evtPattern = new RegExp(`${escapeRegex(extremite)}\\s+(\\d+)`);
-    const matchEvt = text.match(evtPattern);
-    if(matchEvt) nbEvt = +matchEvt[1];
-  }
-
-  // Table des événements basée sur la colonne "Distance"
+  // Table des événements : approche best-effort, base sur la colonne "Distance"
   const events=[];
   const headerIdx = text.lastIndexOf('dB/km');
   const tail = headerIdx>=0 ? text.slice(headerIdx) : text;
@@ -161,7 +142,6 @@ async function parsePDF(arrayBuffer){
 
   return {cable, fibre, origine, extremite, laser, bilanTotal, orl, finFibre, nbEvt, events, rawText:text};
 }
-
 
 function parseKML(text, sourceName, sourceType){
   const doc = new DOMParser().parseFromString(text,'text/xml');
