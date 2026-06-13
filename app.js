@@ -396,22 +396,19 @@ function openMeasureDetail(m){
     <h2>Corrélation avec le tracé KML</h2>
 
     <div class="card" style="margin-bottom:8px;">
-      <p class="sub" style="margin-bottom:8px;">Extrémités pour la corrélation — saisir les nœuds exacts du KML (autocomplete disponible) :</p>
+      <p class="sub" style="margin-bottom:8px;">Sélectionne le site de départ et d'arrivée (liste des sites importés) pour la corrélation :</p>
       <div style="display:flex;flex-direction:column;gap:8px;">
         <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité A (Origine)</label>
-          <input id="inpOrigine" list="nodeList" placeholder="${m.origine||'ex: FAT_JD_00001'}"
-            value="${m.manualOrigine||''}"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité A — Site de départ</label>
+          <select id="inpOrigine"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;"></select>
         </div>
         <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité B (Fin)</label>
-          <input id="inpExtremite" list="nodeList" placeholder="${m.extremite||'ex: FAT_JD_00042'}"
-            value="${m.manualExtremite||''}"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité B — Site d'arrivée</label>
+          <select id="inpExtremite"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;"></select>
         </div>
       </div>
-      <datalist id="nodeList"></datalist>
       <div style="display:flex;gap:8px;margin-top:10px;">
         <button class="btn" id="btnCorrelate" style="flex:1;">Lancer la corrélation</button>
         <button class="btn secondary" id="btnSaveEndpoints" style="flex:0 0 auto;width:auto;padding:10px 14px;">💾 Sauvegarder</button>
@@ -423,12 +420,41 @@ function openMeasureDetail(m){
   document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
 
-  // Remplir la datalist avec tous les nœuds du graphe KML
-  const graph=buildGraph();
-  const nodeList=document.getElementById('nodeList');
-  Object.keys(graph).sort().forEach(n=>{
-    const opt=document.createElement('option'); opt.value=n; nodeList.appendChild(opt);
-  });
+  // Remplir les <select> : liste des sites (base_site.kmz / KMZ) + nœuds du tracé KML
+  const {graph}=buildGraph();
+  const siteNames=[...new Set(AppState.points.map(p=>p.name))].sort();
+  const nodeNames=Object.keys(graph).sort();
+
+  function buildOptions(selected){
+    let html='<option value="">— Sélectionner —</option>';
+    if(siteNames.length){
+      html+='<optgroup label="Sites">';
+      siteNames.forEach(n=>{ html+=`<option value="${n}" ${n===selected?'selected':''}>${n}</option>`; });
+      html+='</optgroup>';
+    }
+    if(nodeNames.length){
+      html+='<optgroup label="Nœuds du tracé (KML)">';
+      nodeNames.forEach(n=>{ html+=`<option value="${n}" ${n===selected?'selected':''}>${n}</option>`; });
+      html+='</optgroup>';
+    }
+    return html;
+  }
+
+  // Pré-sélection : valeur manuelle sauvegardée, sinon meilleure correspondance avec le PDF
+  function bestGuess(term){
+    if(!term) return '';
+    const t=norm(term);
+    let exact=siteNames.find(n=>norm(n)===t) || nodeNames.find(n=>norm(n)===t);
+    if(exact) return exact;
+    let partial=siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))
+      || nodeNames.find(n=>norm(n).includes(t)||t.includes(norm(n)));
+    return partial||'';
+  }
+
+  const selA = m.manualOrigine || bestGuess(m.origine);
+  const selB = m.manualExtremite || bestGuess(m.extremite);
+  document.getElementById('inpOrigine').innerHTML=buildOptions(selA);
+  document.getElementById('inpExtremite').innerHTML=buildOptions(selB);
 
   // Focus outline sur les inputs
   ['inpOrigine','inpExtremite'].forEach(id=>{
@@ -476,19 +502,46 @@ function openMeasureDetail(m){
 
 /* ---------------- CORRELATION ---------------- */
 function buildGraph(){
-  const graph={};
+  const graph={}, nodeCoords={};
   AppState.sections.forEach(s=>{
     if(!s.endA||!s.endB) return;
     (graph[s.endA]=graph[s.endA]||[]).push({to:s.endB, w:s.length, sectionId:s.id});
     (graph[s.endB]=graph[s.endB]||[]).push({to:s.endA, w:s.length, sectionId:s.id});
+    if(!nodeCoords[s.endA]) nodeCoords[s.endA]=s.coords[0];
+    if(!nodeCoords[s.endB]) nodeCoords[s.endB]=s.coords[s.coords.length-1];
   });
-  return graph;
+  return {graph, nodeCoords};
 }
+function norm(t){ return (t||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
 function findNodeCandidates(graph, term){
   if(!term) return [];
-  const norm=t=>t.toUpperCase().replace(/[^A-Z0-9]/g,'');
   const t=norm(term);
   return Object.keys(graph).filter(n=>norm(n).includes(t) || t.includes(norm(n)));
+}
+// Cherche le(s) nœud(s) du graphe de tracé les plus proches d'un terme désignant un SITE
+// (ex: "KARANG" -> site "KARANG_POSTE_G" dans base_site.kmz -> nœud fibre le plus proche)
+function findNodeViaSite(graph, nodeCoords, term, maxDistM=3000){
+  if(!term) return [];
+  const t=norm(term);
+  const matchingSites=AppState.points.filter(p=>{
+    const pn=norm(p.name);
+    return pn.includes(t) || t.includes(pn);
+  });
+  if(!matchingSites.length) return [];
+  const nodeNames=Object.keys(nodeCoords);
+  if(!nodeNames.length) return [];
+  const results=[];
+  matchingSites.forEach(site=>{
+    let best=null;
+    nodeNames.forEach(n=>{
+      const c=nodeCoords[n];
+      const d=haversine(site.lat, site.lon, c[0], c[1]);
+      if(!best || d<best.dist) best={node:n, dist:d, site};
+    });
+    if(best && best.dist<=maxDistM) results.push(best);
+  });
+  results.sort((a,b)=>a.dist-b.dist);
+  return results;
 }
 function dijkstra(graph, start, end){
   const dist={}, prev={};
@@ -517,22 +570,31 @@ function dijkstra(graph, start, end){
 }
 function correlate(measure){
   if(!AppState.sections.length) return {error:'Aucun fichier KML/KMZ de tracé chargé.'};
-  const graph=buildGraph();
+  const {graph, nodeCoords}=buildGraph();
   const origineEff = measure.manualOrigine || measure.origine;
   const extremiteEff = measure.manualExtremite || measure.extremite;
-  const startCands=findNodeCandidates(graph, origineEff);
-  const endCands=findNodeCandidates(graph, extremiteEff);
+
+  // 1) correspondance directe avec un nœud du graphe (extrémité de section)
+  let startCands=findNodeCandidates(graph, origineEff).map(n=>({node:n}));
+  let endCands=findNodeCandidates(graph, extremiteEff).map(n=>({node:n}));
+
+  // 2) sinon, le terme désigne probablement un SITE (base_site.kmz) -> on cherche
+  //    le nœud de tracé géographiquement le plus proche de ce site
+  if(!startCands.length) startCands=findNodeViaSite(graph, nodeCoords, origineEff);
+  if(!endCands.length) endCands=findNodeViaSite(graph, nodeCoords, extremiteEff);
+
   if(!startCands.length || !endCands.length){
     const nodes=Object.keys(graph).slice(0,8).join(', ');
-    return {error:`Extrémités introuvables dans le tracé.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nExemples de nœuds disponibles : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus.`};
+    return {error:`Extrémités introuvables.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nAucun nœud de tracé ni site (base_site.kmz) correspondant à proximité.\nExemples de nœuds disponibles : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus (nom d'un site ou d'un point du tracé).`};
   }
   let best=null;
   startCands.forEach(s=>endCands.forEach(e=>{
-    if(s===e) return;
-    const r=dijkstra(graph,s,e);
+    if(s.node===e.node) return;
+    const r=dijkstra(graph,s.node,e.node);
     if(r){
-      const score = measure.finFibre ? Math.abs(r.total-measure.finFibre) : r.total;
-      if(!best || score<best.score) best={...r, start:s, end:e, score};
+      const snapPenalty=(s.dist||0)+(e.dist||0);
+      const score = (measure.finFibre ? Math.abs(r.total-measure.finFibre) : r.total) + snapPenalty;
+      if(!best || score<best.score) best={...r, start:s.node, end:e.node, startSnap:s, endSnap:e, score};
     }
   }));
   if(!best) return {error:'Aucun chemin continu trouvé entre les deux extrémités dans le tracé chargé.'};
