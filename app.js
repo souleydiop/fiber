@@ -14,6 +14,14 @@ const AppState = {
   layers: {}
 };
 
+function isAnomalyEvent(ev, m){
+  const isEndpoint = ev.num===1 || ev.num===(m.nbEvt || m.events?.length);
+  if(isEndpoint) return false;
+  const badAffaib = ev.affaib!==null && ev.affaib>0.3;
+  const badReflect = ev.reflect!==null && ev.reflect>-35;
+  return badAffaib || badReflect;
+}
+
 /* ---------------- UTILS ---------------- */
 function toast(msg){
   const t=document.getElementById('toast');
@@ -129,15 +137,53 @@ async function parsePDF(arrayBuffer){
     if(m){ laser=+m[1]; bilanTotal=+m[2]; orl=+m[3]; finFibre=+m[4]; nbEvt=+m[5]; }
   }
 
-  // Table des événements : approche best-effort, base sur la colonne "Distance"
+  // ---- Table des événements : extraction par POSITION (x/y), pas par texte linéaire ----
+  // Le tableau Evt/Distance/Affaib./Réflect./Pente/Section/Bilan est une grille 2D.
+  // pdf.js fournit transform[4]=x et transform[5]=y pour chaque item de texte.
+  const COLS = ['Evt','Distance','Affaib.','Réflect.','Pente','Section','Bilan'];
+  const items = content.items.filter(i=>i.str.trim()!=='').map(i=>({
+    str:i.str.trim(), x:i.transform[4], y:i.transform[5]
+  }));
+
+  // 1) localiser la ligne d'en-tête et les positions x de chaque colonne
+  const headerItems = items.filter(i=>COLS.includes(i.str));
   const events=[];
-  const headerIdx = text.lastIndexOf('dB/km');
-  const tail = headerIdx>=0 ? text.slice(headerIdx) : text;
-  const evRe=/(\d+)\s+(\d+\.\d+)/g;
-  let mm, lastNum=0;
-  while((mm=evRe.exec(tail))){
-    const num=+mm[1], distance=+mm[2];
-    if(num===lastNum+1){ events.push({num, distance}); lastNum=num; }
+  if(headerItems.length>=4){
+    const headerY = headerItems[0].y;
+    const colX = {};
+    headerItems.forEach(h=>{ if(Math.abs(h.y-headerY)<2) colX[h.str]=h.x; });
+
+    // 2) regrouper les items situés sous l'en-tête en lignes (par y), tolérance 2pt
+    const dataItems = items.filter(i=>i.y < headerY-2 && !/^(m|dB|dB\/km)$/.test(i.str));
+    const rows={};
+    dataItems.forEach(it=>{
+      const key = Object.keys(rows).find(k=>Math.abs(+k-it.y)<2);
+      const k = key!==undefined ? key : it.y;
+      (rows[k]=rows[k]||[]).push(it);
+    });
+
+    // 3) trier les lignes du haut vers le bas (y décroissant) et assigner chaque item
+    //    à la colonne dont l'ancre x est la plus proche
+    const colKeys = Object.keys(colX);
+    Object.keys(rows).map(Number).sort((a,b)=>b-a).forEach(y=>{
+      const row={};
+      rows[y].forEach(it=>{
+        let best=null, bestD=Infinity;
+        colKeys.forEach(c=>{ const d=Math.abs(it.x-colX[c]); if(d<bestD){bestD=d; best=c;} });
+        if(bestD<20) row[best]=it.str;
+      });
+      if(row['Evt']!==undefined){
+        events.push({
+          num: parseInt(row['Evt'],10),
+          distance: row['Distance']!==undefined ? parseFloat(row['Distance']) : null,
+          affaib: row['Affaib.']!==undefined ? parseFloat(row['Affaib.']) : null,
+          reflect: row['Réflect.']!==undefined ? parseFloat(row['Réflect.']) : null,
+          pente: row['Pente']!==undefined ? parseFloat(row['Pente']) : null,
+          section: row['Section']!==undefined ? parseFloat(row['Section']) : null,
+          bilan: row['Bilan']!==undefined ? parseFloat(row['Bilan']) : null,
+        });
+      }
+    });
   }
 
   return {cable, fibre, origine, extremite, laser, bilanTotal, orl, finFibre, nbEvt, events, rawText:text};
@@ -259,7 +305,7 @@ function renderAccueil(){
   document.getElementById('kpiPdf').textContent=AppState.measures.length;
   document.getElementById('kpiSections').textContent=AppState.sections.length;
   document.getElementById('kpiSites').textContent=AppState.points.length;
-  const faults=AppState.measures.reduce((acc,m)=>acc+Math.max(0,(m.events?.length||0)-2),0);
+  const faults=AppState.measures.reduce((acc,m)=>acc+(m.events||[]).filter(ev=>isAnomalyEvent(ev,m)).length,0);
   document.getElementById('kpiFaults').textContent=faults;
 
   const list=document.getElementById('recentMeasures');
@@ -275,7 +321,7 @@ function renderAccueil(){
 }
 
 function measureCardHTML(m){
-  const nAnom=Math.max(0,(m.events?.length||0)-2);
+  const nAnom=(m.events||[]).filter(ev=>isAnomalyEvent(ev,m)).length;
   return `<div class="card tap">
     <div class="row">
       <strong style="font-size:13px;">${m.cable||m.name}</strong>
@@ -301,7 +347,7 @@ function renderMesures(){
 }
 
 function openMeasureDetail(m){
-  const nAnom=Math.max(0,(m.events?.length||0)-2);
+  const nAnom=(m.events||[]).filter(ev=>isAnomalyEvent(ev,m)).length;
   let html=`
     <h1>${m.cable||m.name}</h1>
     <p class="sub" style="margin-bottom:10px;">${m.name}</p>
@@ -316,14 +362,22 @@ function openMeasureDetail(m){
       <span class="badge ${nAnom>0?'fault':'ok'}">${nAnom>0?nAnom+' évt(s) à vérifier':'Liaison OK'}</span>
     </div>
 
-    <h2>Événements (distance / m)</h2>
-    <div class="tablewrap"><table><thead><tr><th>Evt</th><th>Distance</th><th>Cumulé</th></tr></thead><tbody>
+    <h2>Événements OTDR</h2>
+    <div class="tablewrap"><table><thead><tr><th>Evt</th><th>Distance</th><th>Affaib.</th><th>Réflect.</th><th>Pente</th><th>Section</th><th>Bilan</th></tr></thead><tbody>
     ${(m.events||[]).map(ev=>{
-      const isMid = ev.num>1 && ev.num<(m.nbEvt||m.events.length);
-      return `<tr class="event-row ${isMid?'fault':''}"><td>#${ev.num}</td><td>${fmtNum(ev.distance,2)} m</td><td>${fmtLen(ev.distance)}</td></tr>`;
+      const anom=isAnomalyEvent(ev,m);
+      return `<tr class="event-row ${anom?'fault':''}">
+        <td>#${ev.num}</td>
+        <td>${fmtNum(ev.distance,2)} m</td>
+        <td>${ev.affaib!==null?fmtNum(ev.affaib,3):'—'}</td>
+        <td>${ev.reflect!==null?fmtNum(ev.reflect,2):'—'}</td>
+        <td>${ev.pente!==null?fmtNum(ev.pente,3):'—'}</td>
+        <td>${ev.section!==null?fmtLen(ev.section):'—'}</td>
+        <td>${ev.bilan!==null?fmtNum(ev.bilan,3):'—'}</td>
+      </tr>`;
     }).join('')}
     </tbody></table></div>
-    <p class="sub" style="margin-top:6px;">Distances extraites automatiquement du PDF (colonne "Distance" du tableau OTDR).</p>
+    <p class="sub" style="margin-top:6px;">Table extraite par position (x/y) depuis le PDF Viavi — colonnes : m / dB / dB / dB/km / m / dB.</p>
 
     <h2>Corrélation avec le tracé KML</h2>
     <div id="corrResult"></div>
@@ -441,10 +495,10 @@ function renderCorrelationResult(result, measure){
     </div>
     <div class="tablewrap"><table><thead><tr><th>Evt</th><th>Distance</th><th>Position GPS</th><th></th></tr></thead><tbody>
     ${result.placedEvents.map(ev=>{
-      const isMid = ev.num>1 && ev.num<(measure.nbEvt||result.placedEvents.length);
+      const anom=isAnomalyEvent(ev,measure);
       const coordTxt = ev.pos? ev.pos[0].toFixed(6)+', '+ev.pos[1].toFixed(6) : '—';
       const navBtn = ev.pos? `<button class="btn small secondary" onclick="navigateTo(${ev.pos[0]},${ev.pos[1]})">Naviguer</button>` : '';
-      return `<tr class="event-row ${isMid?'fault':''}"><td>#${ev.num}</td><td>${fmtNum(ev.distance,1)} m</td><td>${coordTxt}</td><td>${navBtn}</td></tr>`;
+      return `<tr class="event-row ${anom?'fault':''}"><td>#${ev.num}</td><td>${fmtNum(ev.distance,1)} m</td><td>${coordTxt}</td><td>${navBtn}</td></tr>`;
     }).join('')}
     </tbody></table></div>
     <button class="btn secondary" style="margin-top:8px;" onclick="showCorrelationOnMap()">Afficher sur la carte</button>
@@ -597,9 +651,9 @@ function renderMap(){
     const measure=AppState.measures.find(m=>m.recId==recId);
     (result.placedEvents||[]).forEach(ev=>{
       if(!ev.pos) return;
-      const isMid = ev.num>1 && ev.num<(measure?.nbEvt||result.placedEvents.length);
-      L.circleMarker(ev.pos,{radius:7,color:isMid?'#ff5d5d':'#39d98a',fillColor:isMid?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
-        .bindPopup(`<b>${measure?.cable||measure?.name||''}</b><br>Événement #${ev.num} — ${fmtNum(ev.distance,1)} m<br>${isMid?'<span style="color:#ff5d5d">À vérifier</span><br>':''}<a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
+      const anom=measure?isAnomalyEvent(ev,measure):false;
+      L.circleMarker(ev.pos,{radius:7,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
+        .bindPopup(`<b>${measure?.cable||measure?.name||''}</b><br>Événement #${ev.num} — ${fmtNum(ev.distance,1)} m<br>${anom?'<span style="color:#ff5d5d">À vérifier</span><br>':''}<a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
         .addTo(AppState.layers.events);
     });
   });
@@ -623,8 +677,8 @@ function drawCorrelationLayer(){
   });
   result.placedEvents.forEach(ev=>{
     if(!ev.pos) return;
-    const isMid = ev.num>1 && ev.num<(measure.nbEvt||result.placedEvents.length);
-    L.circleMarker(ev.pos,{radius:7,color:isMid?'#ff5d5d':'#39d98a',fillColor:isMid?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
+    const anom=isAnomalyEvent(ev,measure);
+    L.circleMarker(ev.pos,{radius:7,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
       .bindPopup(`<b>Événement #${ev.num}</b><br>Distance: ${fmtNum(ev.distance,1)} m<br><a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
       .addTo(AppState.layers.events);
   });
