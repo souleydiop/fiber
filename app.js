@@ -130,33 +130,10 @@ async function parsePDF(arrayBuffer){
   }
 
   // Table des événements : approche best-effort, base sur la colonne "Distance"
-  const events = [];
-
-const eventRegex =
-/(\d+)\s+([\d.]+)\s+([\d.]+)?\s*(-?[\d.]*)?\s*([\d.]*)?\s*([\d.]*)?/g;
-
-let match;
-
-while ((match = eventRegex.exec(text)) !== null) {
-  const num = Number(match[1]);
-  const distance = Number(match[2]);
-
-  if (
-    !isNaN(num) &&
-    !isNaN(distance) &&
-    num > 0 &&
-    distance >= 0
-  ) {
-    events.push({
-      num,
-      distance,
-      loss: Number(match[3]) || 0,
-      reflectance: Number(match[4]) || null,
-      slope: Number(match[5]) || null,
-      section: Number(match[6]) || null
-    });
-  }
-}
+  const events=[];
+  const headerIdx = text.lastIndexOf('dB/km');
+  const tail = headerIdx>=0 ? text.slice(headerIdx) : text;
+  const evRe=/(\d+)\s+(\d+\.\d+)/g;
   let mm, lastNum=0;
   while((mm=evRe.exec(tail))){
     const num=+mm[1], distance=+mm[2];
