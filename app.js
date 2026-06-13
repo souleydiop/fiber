@@ -114,30 +114,43 @@ async function parsePDF(arrayBuffer){
   const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
   const page = await pdf.getPage(1);
   const content = await page.getTextContent();
-  const text = content.items.map(i=>i.str).join(' ').replace(/\s+/g,' ');
+  const text = content.items.map(i=>i.str).join(' ').replace(/s+/g,' ');
 
   const get=(re)=>{ const m=text.match(re); return m? m[1].trim() : null; };
-  const cable     = get(/Nom Câble\s*:\s*(.*?)\s*Nom Fibre/);
-  const fibre     = get(/Nom Fibre\s*:\s*(\S+)/);
-  const origine   = get(/Origine\s*:\s*(.*?)\s*Extrémité/);
-  const extremite = get(/Extrémité\s*:\s*(.*?)\s*(?:Réf|Opérateur|$)/);
+  const cable = get(/Nom Câbles*:s*(.*?)s*Nom Fibre/);
+  const fibre = get(/Nom Fibres*:s*(S+)/);
+  const origine = get(/Origines*:s*(.*?)s*Extrémité/);
+  const extremite = get(/Extrémités*:s*(.*?)s*(?:Réf|Opérateur|$)/);
 
   let laser=null, bilanTotal=null, orl=null, finFibre=null, nbEvt=null;
   if(origine && extremite){
     const re = new RegExp('(\\d+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+'+escapeRegex(origine)+'\\s*->\\s*'+escapeRegex(extremite)+'\\s+(\\d+)');
     const m = text.match(re);
-    if(m){ laser=+m[1]; bilanTotal=+m[2]; orl=+m[3]; finFibre=+m[4]; nbEvt=+m[5]; }
+    if(m){
+      laser = +m[1];
+      bilanTotal = +m[2];
+      orl = +m[3];
+      finFibre = +m[4];
+      nbEvt = +m[5];
+    }
   }
 
-  // Table des événements : approche best-effort, base sur la colonne "Distance"
-  const events=[];
-  const headerIdx = text.lastIndexOf('dB/km');
-  const tail = headerIdx>=0 ? text.slice(headerIdx) : text;
-  const evRe=/(\d+)\s+(\d+\.\d+)/g;
-  let mm, lastNum=0;
-  while((mm=evRe.exec(tail))){
-    const num=+mm[1], distance=+mm[2];
-    if(num===lastNum+1){ events.push({num, distance}); lastNum=num; }
+  const events = [];
+  const rows = text.split(/s{2,}|
+/).map(s => s.trim()).filter(Boolean);
+
+  for(const row of rows){
+    const m = row.match(/^(d+)s+([d.]+)s+(-?[d.]+)?s+(-?[d.]+)?s+([d.]+)?s+([d.]+)?$/);
+    if(m){
+      events.push({
+        num: +m[1],
+        distance: +m[2],
+        loss: m[3] ? +m[3] : null,
+        reflectance: m[4] ? +m[4] : null,
+        slope: m[5] ? +m[5] : null,
+        section: m[6] ? +m[6] : null
+      });
+    }
   }
 
   return {cable, fibre, origine, extremite, laser, bilanTotal, orl, finFibre, nbEvt, events, rawText:text};
