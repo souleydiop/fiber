@@ -1,8 +1,8 @@
 /* ============================================================
    OSP MANAGER - Application principale
    ============================================================ */
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+import * as pdfjsLib from './pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs';
 
 const AppState = {
   files: [],       // enregistrements bruts (DB)
@@ -201,8 +201,9 @@ async function handleFiles(fileList){
     try{
       if(ext==='pdf'){
         const buf=await file.arrayBuffer();
+        const base64=arrayBufferToBase64(buf);
         const parsed=await parsePDF(buf);
-        await dbAdd({name:file.name, ext, date:Date.now(), size:file.size, parsed, dataBase64:arrayBufferToBase64(buf)});
+        await dbAdd({name:file.name, ext, date:Date.now(), size:file.size, parsed, dataBase64:base64});
       } else if(ext==='kml' || ext==='kmz'){
         let text;
         const sourceType = /site|bts/i.test(file.name) ? 'bts' : 'fiber';
@@ -221,7 +222,7 @@ async function handleFiles(fileList){
       }
     }catch(err){
       console.error(err);
-      toast('Erreur lors de la lecture de '+file.name);
+      toast('Erreur sur '+file.name+' : '+(err && err.message ? err.message : err));
     }
   }
   inner.style.width='100%';
@@ -245,6 +246,11 @@ async function loadAll(){
       (r.parsed.sections||[]).forEach(s=>AppState.sections.push({...s, recId:r.id}));
       (r.parsed.points||[]).forEach(p=>AppState.points.push({...p, recId:r.id}));
     }
+  });
+  // Corrélation automatique de chaque mesure avec le tracé disponible
+  AppState.correlations={};
+  AppState.measures.forEach(m=>{
+    AppState.correlations[m.recId]=correlate(m);
   });
 }
 
@@ -321,13 +327,17 @@ function openMeasureDetail(m){
 
     <h2>Corrélation avec le tracé KML</h2>
     <div id="corrResult"></div>
-    <button class="btn" id="btnCorrelate" style="margin-top:8px;">Lancer la corrélation</button>
+    <button class="btn" id="btnCorrelate" style="margin-top:8px;">Recalculer la corrélation</button>
   `;
   document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
 
+  const cached=AppState.correlations[m.recId];
+  if(cached) renderCorrelationResult(cached, m);
+
   document.getElementById('btnCorrelate').addEventListener('click',()=>{
     const result=correlate(m);
+    AppState.correlations[m.recId]=result;
     renderCorrelationResult(result, m);
   });
 }
@@ -556,12 +566,12 @@ function initMap(){
   AppState.layers.sections=L.layerGroup().addTo(AppState.map);
   AppState.layers.sites=L.layerGroup();
   AppState.layers.joints=L.layerGroup();
-  AppState.layers.events=L.layerGroup();
+  AppState.layers.events=L.layerGroup().addTo(AppState.map);
   AppState.layers.correlation=L.layerGroup().addTo(AppState.map);
 }
 function renderMap(){
   if(!AppState.map) return;
-  ['sections','sites','joints'].forEach(k=>AppState.layers[k].clearLayers());
+  ['sections','sites','joints','events'].forEach(k=>AppState.layers[k].clearLayers());
 
   AppState.sections.forEach(s=>{
     L.polyline(s.coords,{color:'#4ad7ff',weight:3,opacity:.75})
@@ -579,6 +589,19 @@ function renderMap(){
         .bindPopup(`<b>${p.name}</b><br>${p.category==='joint'?'Joint':'Chambre'}`)
         .addTo(AppState.layers.joints);
     }
+  });
+
+  // Événements OTDR corrélés (toutes mesures)
+  Object.entries(AppState.correlations||{}).forEach(([recId, result])=>{
+    if(!result || result.error) return;
+    const measure=AppState.measures.find(m=>m.recId==recId);
+    (result.placedEvents||[]).forEach(ev=>{
+      if(!ev.pos) return;
+      const isMid = ev.num>1 && ev.num<(measure?.nbEvt||result.placedEvents.length);
+      L.circleMarker(ev.pos,{radius:7,color:isMid?'#ff5d5d':'#39d98a',fillColor:isMid?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
+        .bindPopup(`<b>${measure?.cable||measure?.name||''}</b><br>Événement #${ev.num} — ${fmtNum(ev.distance,1)} m<br>${isMid?'<span style="color:#ff5d5d">À vérifier</span><br>':''}<a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
+        .addTo(AppState.layers.events);
+    });
   });
 }
 function drawCorrelationLayer(){

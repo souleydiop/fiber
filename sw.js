@@ -5,7 +5,10 @@ const ASSETS=[
   './app.js',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './pdf.min.mjs',
+  './pdf.worker.min.mjs',
+  './jszip.min.js'
 ];
 
 self.addEventListener('install', e=>{
