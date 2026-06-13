@@ -112,36 +112,70 @@ async function dbDelete(id){
 /* ---------------- PARSERS ---------------- */
 async function parsePDF(arrayBuffer){
   const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
-  const page = await pdf.getPage(1);
-  const content = await page.getTextContent();
-  const text = content.items.map(i=>i.str).join(' ').replace(/\s+/g,' ');
+  let fullText = "";
+  
+  // 1. Extraction du texte de toutes les pages (au cas où le PDF fait plusieurs pages)
+  for(let p=1; p<=pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    fullText += content.items.map(i=>i.str).join(' ') + " ";
+  }
+  const text = fullText.replace(/\s+/g,' ');
 
   const get=(re)=>{ const m=text.match(re); return m? m[1].trim() : null; };
+  
+  // CORRECTION 1 : Capture le nom de la fibre même s'il contient des espaces (ex: "port 4")
   const cable     = get(/Nom Câble\s*:\s*(.*?)\s*Nom Fibre/);
-  const fibre     = get(/Nom Fibre\s*:\s*(\S+)/);
+  const fibre     = get(/Nom Fibre\s*:\s*(.*?)\s*(?:Origine|Réf|$)/);
   const origine   = get(/Origine\s*:\s*(.*?)\s*Extrémité/);
   const extremite = get(/Extrémité\s*:\s*(.*?)\s*(?:Réf|Opérateur|$)/);
 
   let laser=null, bilanTotal=null, orl=null, finFibre=null, nbEvt=null;
-  if(origine && extremite){
-    const re = new RegExp('(\\d+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+'+escapeRegex(origine)+'\\s*->\\s*'+escapeRegex(extremite)+'\\s+(\\d+)');
-    const m = text.match(re);
-    if(m){ laser=+m[1]; bilanTotal=+m[2]; orl=+m[3]; finFibre=+m[4]; nbEvt=+m[5]; }
+  
+  // CORRECTION 2 : Parseur de résumé robuste (ignore l'intercalage de "Liaison dB")
+  const summaryNumsRe = /(\d{4})\s+([\d.]+)\s+([\d.]+)\s+(?:Liaison\s+dB\s+)?([\d.]+)/;
+  const mNums = text.match(summaryNumsRe);
+  if(mNums) {
+    laser      = +mNums[1];
+    bilanTotal = +mNums[2];
+    orl        = +mNums[3];
+    finFibre   = +mNums[4];
   }
 
-  // Table des événements : approche best-effort, base sur la colonne "Distance"
+  if(origine && extremite) {
+    const evtRe = new RegExp(escapeRegex(extremite) + '\\s+(\\d+)');
+    const mEvt = text.match(evtRe);
+    if(mEvt) nbEvt = +mEvt[1];
+  }
+
+  // CORRECTION 3 : Extraction sécurisée de la table des événements
   const events=[];
   const headerIdx = text.lastIndexOf('dB/km');
-  const tail = headerIdx>=0 ? text.slice(headerIdx) : text;
-  const evRe=/(\d+)\s+(\d+\.\d+)/g;
-  let mm, lastNum=0;
-  while((mm=evRe.exec(tail))){
-    const num=+mm[1], distance=+mm[2];
-    if(num===lastNum+1){ events.push({num, distance}); lastNum=num; }
+  
+  if (headerIdx >= 0) {
+    // On isole ce qui suit "dB/km m dB"
+    const tail = text.slice(headerIdx + 5); 
+    
+    // On cherche un chiffre isolé en début de séquence (le numéro d'événement) 
+    // suivi de la distance (nombre à virgule), en ignorant le reste de la ligne
+    const evRe = /(?:^|\s)(\d+)\s+(\d+\.\d+)/g;
+    let mm, lastNum = 0;
+    
+    while((mm = evRe.exec(tail))){
+      const num = +mm[1];
+      const distance = +mm[2];
+      
+      // Sécurité : On vérifie que c'est bien l'événement suivant attendu
+      if(num === lastNum + 1){ 
+        events.push({num, distance}); 
+        lastNum = num; 
+      }
+    }
   }
 
   return {cable, fibre, origine, extremite, laser, bilanTotal, orl, finFibre, nbEvt, events, rawText:text};
 }
+
 
 function parseKML(text, sourceName, sourceType){
   const doc = new DOMParser().parseFromString(text,'text/xml');
