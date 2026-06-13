@@ -396,17 +396,19 @@ function openMeasureDetail(m){
     <h2>Corrélation avec le tracé KML</h2>
 
     <div class="card" style="margin-bottom:8px;">
-      <p class="sub" style="margin-bottom:8px;">Sélectionne le site de départ et d'arrivée (liste des sites importés) pour la corrélation :</p>
+      <p class="sub" style="margin-bottom:8px;">Saisis le site de départ et d'arrivée (liste des sites importés) pour la corrélation :</p>
       <div style="display:flex;flex-direction:column;gap:8px;">
         <div>
           <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité A — Site de départ</label>
-          <select id="inpOrigine"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;"></select>
+          <input id="inpOrigine" list="siteListA" autocomplete="off" placeholder="${m.origine||'ex: KLK_AGENCE_G'}"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
+          <datalist id="siteListA"></datalist>
         </div>
         <div>
           <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité B — Site d'arrivée</label>
-          <select id="inpExtremite"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;"></select>
+          <input id="inpExtremite" list="siteListB" autocomplete="off" placeholder="${m.extremite||'ex: KARANG_POSTE_G'}"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
+          <datalist id="siteListB"></datalist>
         </div>
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;">
@@ -420,41 +422,30 @@ function openMeasureDetail(m){
   document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
 
-  // Remplir les <select> : liste des sites (base_site.kmz / KMZ) + nœuds du tracé KML
-  const {graph}=buildGraph();
+  // Datalist : liste des sites issus des KMZ importés (base_site.kmz etc.)
   const siteNames=[...new Set(AppState.points.map(p=>p.name))].sort();
-  const nodeNames=Object.keys(graph).sort();
-
-  function buildOptions(selected){
-    let html='<option value="">— Sélectionner —</option>';
-    if(siteNames.length){
-      html+='<optgroup label="Sites">';
-      siteNames.forEach(n=>{ html+=`<option value="${n}" ${n===selected?'selected':''}>${n}</option>`; });
-      html+='</optgroup>';
-    }
-    if(nodeNames.length){
-      html+='<optgroup label="Nœuds du tracé (KML)">';
-      nodeNames.forEach(n=>{ html+=`<option value="${n}" ${n===selected?'selected':''}>${n}</option>`; });
-      html+='</optgroup>';
-    }
-    return html;
+  function fillSiteList(elId){
+    const dl=document.getElementById(elId);
+    dl.innerHTML='';
+    siteNames.forEach(n=>{
+      const opt=document.createElement('option'); opt.value=n; dl.appendChild(opt);
+    });
   }
+  fillSiteList('siteListA');
+  fillSiteList('siteListB');
 
-  // Pré-sélection : valeur manuelle sauvegardée, sinon meilleure correspondance avec le PDF
+  // Pré-remplissage : valeur manuelle sauvegardée, sinon meilleure correspondance avec le PDF
   function bestGuess(term){
     if(!term) return '';
     const t=norm(term);
-    let exact=siteNames.find(n=>norm(n)===t) || nodeNames.find(n=>norm(n)===t);
+    let exact=siteNames.find(n=>norm(n)===t);
     if(exact) return exact;
-    let partial=siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))
-      || nodeNames.find(n=>norm(n).includes(t)||t.includes(norm(n)));
-    return partial||'';
+    let partial=siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)));
+    return partial||term;
   }
 
-  const selA = m.manualOrigine || bestGuess(m.origine);
-  const selB = m.manualExtremite || bestGuess(m.extremite);
-  document.getElementById('inpOrigine').innerHTML=buildOptions(selA);
-  document.getElementById('inpExtremite').innerHTML=buildOptions(selB);
+  document.getElementById('inpOrigine').value = m.manualOrigine || bestGuess(m.origine);
+  document.getElementById('inpExtremite').value = m.manualExtremite || bestGuess(m.extremite);
 
   // Focus outline sur les inputs
   ['inpOrigine','inpExtremite'].forEach(id=>{
