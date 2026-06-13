@@ -116,6 +116,15 @@ async function dbDelete(id){
     req.onerror=e=>reject(e);
   });
 }
+async function dbUpdate(rec){
+  const db=await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(STORE,'readwrite');
+    const req=tx.objectStore(STORE).put(rec);
+    req.onsuccess=()=>resolve();
+    req.onerror=e=>reject(e);
+  });
+}
 
 /* ---------------- PARSERS ---------------- */
 async function parsePDF(arrayBuffer){
@@ -287,7 +296,12 @@ async function loadAll(){
   AppState.points=[];
   recs.forEach(r=>{
     if(r.ext==='pdf'){
-      AppState.measures.push({recId:r.id, name:r.name, date:r.date, ...r.parsed});
+      AppState.measures.push({
+        recId:r.id, name:r.name, date:r.date,
+        manualOrigine:r.manualOrigine||null,
+        manualExtremite:r.manualExtremite||null,
+        ...r.parsed
+      });
     } else if(r.ext==='kml' || r.ext==='kmz'){
       (r.parsed.sections||[]).forEach(s=>AppState.sections.push({...s, recId:r.id}));
       (r.parsed.points||[]).forEach(p=>AppState.points.push({...p, recId:r.id}));
@@ -327,7 +341,7 @@ function measureCardHTML(m){
       <strong style="font-size:13px;">${m.cable||m.name}</strong>
       <span class="badge ${nAnom>0?'fault':'ok'}">${nAnom>0?nAnom+' évt(s)':'OK'}</span>
     </div>
-    <div class="row"><span class="sub">Fibre ${m.fibre||'—'} · ${m.origine||'?'} → ${m.extremite||'?'}</span></div>
+    <div class="row"><span class="sub">Fibre ${m.fibre||'—'} · ${m.manualOrigine||m.origine||'?'} → ${m.manualExtremite||m.extremite||'?'}${m.manualOrigine?'<span style="font-size:9px;color:var(--fiber);margin-left:4px;">● manuel</span>':''}</span></div>
     <div class="row"><span class="sub">Bilan ${fmtNum(m.bilanTotal,3)} dB · Longueur ${fmtLen(m.finFibre)}</span></div>
   </div>`;
 }
@@ -358,7 +372,7 @@ function openMeasureDetail(m){
       <div class="kpi"><div class="v">${fmtNum(m.orl,2)}</div><div class="l">ORL (dB)</div></div>
     </div>
     <div class="row" style="margin-top:6px;">
-      <span class="sub">${m.origine||'?'} → ${m.extremite||'?'}</span>
+      <span class="sub">${m.manualOrigine||m.origine||'?'} → ${m.manualExtremite||m.extremite||'?'}${m.manualOrigine?' <span style="font-size:9px;color:var(--fiber)">● manuel</span>':''}</span>
       <span class="badge ${nAnom>0?'fault':'ok'}">${nAnom>0?nAnom+' évt(s) à vérifier':'Liaison OK'}</span>
     </div>
 
@@ -380,19 +394,83 @@ function openMeasureDetail(m){
     <p class="sub" style="margin-top:6px;">Table extraite par position (x/y) depuis le PDF Viavi — colonnes : m / dB / dB / dB/km / m / dB.</p>
 
     <h2>Corrélation avec le tracé KML</h2>
+
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub" style="margin-bottom:8px;">Extrémités pour la corrélation — saisir les nœuds exacts du KML (autocomplete disponible) :</p>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité A (Origine)</label>
+          <input id="inpOrigine" list="nodeList" placeholder="${m.origine||'ex: FAT_JD_00001'}"
+            value="${m.manualOrigine||''}"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité B (Fin)</label>
+          <input id="inpExtremite" list="nodeList" placeholder="${m.extremite||'ex: FAT_JD_00042'}"
+            value="${m.manualExtremite||''}"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
+        </div>
+      </div>
+      <datalist id="nodeList"></datalist>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn" id="btnCorrelate" style="flex:1;">Lancer la corrélation</button>
+        <button class="btn secondary" id="btnSaveEndpoints" style="flex:0 0 auto;width:auto;padding:10px 14px;">💾 Sauvegarder</button>
+      </div>
+    </div>
+
     <div id="corrResult"></div>
-    <button class="btn" id="btnCorrelate" style="margin-top:8px;">Recalculer la corrélation</button>
   `;
   document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
 
+  // Remplir la datalist avec tous les nœuds du graphe KML
+  const graph=buildGraph();
+  const nodeList=document.getElementById('nodeList');
+  Object.keys(graph).sort().forEach(n=>{
+    const opt=document.createElement('option'); opt.value=n; nodeList.appendChild(opt);
+  });
+
+  // Focus outline sur les inputs
+  ['inpOrigine','inpExtremite'].forEach(id=>{
+    document.getElementById(id).addEventListener('focus',e=>{e.target.style.outline='1px solid var(--signal)';});
+    document.getElementById(id).addEventListener('blur',e=>{e.target.style.outline='';});
+  });
+
+  // Sauvegarde manuelle des extrémités dans IndexedDB
+  document.getElementById('btnSaveEndpoints').addEventListener('click', async ()=>{
+    const a=document.getElementById('inpOrigine').value.trim();
+    const b=document.getElementById('inpExtremite').value.trim();
+    // Mettre à jour le record en DB
+    const recs=await dbGetAll();
+    const rec=recs.find(r=>r.id===m.recId);
+    if(rec){
+      rec.manualOrigine=a||null;
+      rec.manualExtremite=b||null;
+      await dbUpdate(rec);
+      // Mettre à jour AppState
+      m.manualOrigine=a||null;
+      m.manualExtremite=b||null;
+      await loadAll();
+      toast('Extrémités sauvegardées');
+    }
+  });
+
+  // Récupérer la corrélation en cache (avec les endpoints manuels déjà appliqués)
   const cached=AppState.correlations[m.recId];
   if(cached) renderCorrelationResult(cached, m);
 
   document.getElementById('btnCorrelate').addEventListener('click',()=>{
-    const result=correlate(m);
+    // Lire les valeurs en cours dans les inputs (même non sauvegardées)
+    const a=document.getElementById('inpOrigine').value.trim();
+    const b=document.getElementById('inpExtremite').value.trim();
+    const mEff={...m,
+      manualOrigine: a||m.manualOrigine||null,
+      manualExtremite: b||m.manualExtremite||null
+    };
+    const result=correlate(mEff);
     AppState.correlations[m.recId]=result;
-    renderCorrelationResult(result, m);
+    AppState.activeCorrelation={result, measure:mEff};
+    renderCorrelationResult(result, mEff);
   });
 }
 
@@ -440,10 +518,13 @@ function dijkstra(graph, start, end){
 function correlate(measure){
   if(!AppState.sections.length) return {error:'Aucun fichier KML/KMZ de tracé chargé.'};
   const graph=buildGraph();
-  const startCands=findNodeCandidates(graph, measure.origine);
-  const endCands=findNodeCandidates(graph, measure.extremite);
+  const origineEff = measure.manualOrigine || measure.origine;
+  const extremiteEff = measure.manualExtremite || measure.extremite;
+  const startCands=findNodeCandidates(graph, origineEff);
+  const endCands=findNodeCandidates(graph, extremiteEff);
   if(!startCands.length || !endCands.length){
-    return {error:`Extrémités introuvables dans le tracé chargé (Origine: "${measure.origine}", Extrémité: "${measure.extremite}"). Vérifie que le bon fichier KML est importé.`};
+    const nodes=Object.keys(graph).slice(0,8).join(', ');
+    return {error:`Extrémités introuvables dans le tracé.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nExemples de nœuds disponibles : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus.`};
   }
   let best=null;
   startCands.forEach(s=>endCands.forEach(e=>{
