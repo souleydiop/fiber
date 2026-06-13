@@ -899,3 +899,11 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     navigator.serviceWorker.register('sw.js').catch(()=>{});
   }
 });
+
+/* ---------------- EXPOSITION GLOBALE ----------------
+   app.js est chargé en type="module" : ses fonctions ne sont PAS sur window.
+   Les attributs onclick="..." inline dans le HTML généré s'exécutent en
+   contexte global, donc on doit explicitement exposer celles utilisées ainsi. */
+window.navigateTo = navigateTo;
+window.showCorrelationOnMap = showCorrelationOnMap;
+window.focusSectionOnMap = focusSectionOnMap;
