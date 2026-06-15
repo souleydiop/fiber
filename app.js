@@ -294,53 +294,6 @@ async function loadAll(){
   AppState.measures=[];
   AppState.sections=[];
   AppState.points=[];
-  
-  // 1. Charger d'abord les points (Sites, Joints)
-  recs.forEach(r=>{
-    if(r.ext==='kml' || r.ext==='kmz'){
-      (r.parsed.points||[]).forEach(p=>AppState.points.push({...p, recId:r.id}));
-    }
-  });
-
-  // 2. Fonction utilitaire pour trouver le point le plus proche
-  function findClosestPoint(lat, lon, maxDist = 50) { // Rayon de tolérance : 50 mètres
-    let closest = null;
-    let minDist = Infinity;
-    AppState.points.forEach(p => {
-      const d = haversine(lat, lon, p.lat, p.lon);
-      if (d < minDist) {
-        minDist = d;
-        closest = p;
-      }
-    });
-    return minDist <= maxDist ? closest.name : null;
-  }
-
-  // 3. Charger les sections et ASSIGNER les extrémités par proximité GPS
-  recs.forEach(r=>{
-    if(r.ext==='kml' || r.ext==='kmz'){
-      (r.parsed.sections||[]).forEach(s => {
-         let section = {...s, recId:r.id};
-         
-         // Si le parseur original n'a pas trouvé d'extrémités dans le nom...
-         if (!section.endA || !section.endB) {
-            const firstCoord = section.coords[0];
-            const lastCoord = section.coords[section.coords.length - 1];
-            
-            // ...on cherche les sites les plus proches du début et de la fin de la ligne
-            const inferredA = findClosestPoint(firstCoord[0], firstCoord[1]);
-            const inferredB = findClosestPoint(lastCoord[0], lastCoord[1]);
-            
-            // On assigne les noms trouvés (ou on garde les coordonnées par défaut si rien n'est proche)
-            section.endA = inferredA || `Point_${firstCoord[0].toFixed(4)}_${firstCoord[1].toFixed(4)}`;
-            section.endB = inferredB || `Point_${lastCoord[0].toFixed(4)}_${lastCoord[1].toFixed(4)}`;
-         }
-         AppState.sections.push(section);
-      });
-    }
-  });
-
-  // 4. Charger les mesures PDF
   recs.forEach(r=>{
     if(r.ext==='pdf'){
       AppState.measures.push({
@@ -349,16 +302,17 @@ async function loadAll(){
         manualExtremite:r.manualExtremite||null,
         ...r.parsed
       });
+    } else if(r.ext==='kml' || r.ext==='kmz'){
+      (r.parsed.sections||[]).forEach(s=>AppState.sections.push({...s, recId:r.id}));
+      (r.parsed.points||[]).forEach(p=>AppState.points.push({...p, recId:r.id}));
     }
   });
-
-  // 5. Corrélation automatique
+  // Corrélation automatique de chaque mesure avec le tracé disponible
   AppState.correlations={};
   AppState.measures.forEach(m=>{
     AppState.correlations[m.recId]=correlate(m);
   });
 }
-
 
 /* ---------------- RENDER : ACCUEIL ---------------- */
 function renderAccueil(){
@@ -634,8 +588,9 @@ function correlate(measure){
       if(!best || score<best.score) best={...r, start:s.node, end:e.node, startSnap:s, endSnap:e, score};
     }
   }));
-// Remplacez la logique de vérification de proximité par une recherche plus large
-// Cherchez la partie qui fait le lien entre les sections et les points
+  if(!best) return {error:'Aucun chemin continu trouvé entre les deux extrémités dans le tracé chargé.'};
+
+  // placement des événements le long du chemin
   const placed=(measure.events||[]).map(ev=>{
     let acc=0, pos=null, secName=null;
     for(const step of best.path){
