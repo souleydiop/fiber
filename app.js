@@ -634,9 +634,8 @@ function correlate(measure){
       if(!best || score<best.score) best={...r, start:s.node, end:e.node, startSnap:s, endSnap:e, score};
     }
   }));
-  if(!best) return {error:'Aucun chemin continu trouvé entre les deux extrémités dans le tracé chargé.'};
-
-  // placement des événements le long du chemin
+// Remplacez la logique de vérification de proximité par une recherche plus large
+// Cherchez la partie qui fait le lien entre les sections et les points
   const placed=(measure.events||[]).map(ev=>{
     let acc=0, pos=null, secName=null;
     for(const step of best.path){
