@@ -292,6 +292,11 @@ a.linklike{color:var(--signal);text-decoration:none;}
     
     <!-- Le reste de vos balises head (meta, title, css...) -->
 </head>
+  window.onerror = function(message, source, lineno, colno, error) {
+    alert("Erreur détectée :\n" + message + "\nLigne : " + lineno);
+    return false;
+};
+
 
 
 </body>
