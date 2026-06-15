@@ -162,7 +162,19 @@ async function parsePDF(arrayBuffer){
   if(origine && extremite){
     const re = new RegExp('(\\d+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+'+escapeRegex(origine)+'\\s*->\\s*'+escapeRegex(extremite)+'\\s+(\\d+)');
     const m = text.match(re);
-    if(m){ laser=+m[1]; bilanTotal=+m[2]; orl=+m[3]; finFibre=+m[4]; nbEvt=+m[5]; }
+    //if(m){ laser=+m[1]; bilanTotal=+m[2]; orl=+m[3]; finFibre=+m[4]; nbEvt=+m[5]; }
+     // REMPLACEZ CECI :
+//if(m){ laser=+m; bilanTotal=+m; orl=+m; finFibre=+m; nbEvt=+m; }
+
+// PAR CELA (Avec les bons index numériques de capture) :
+if(m){ 
+  laser = +m[1]; 
+  bilanTotal = +m[2]; 
+  orl = +m[3]; 
+  finFibre = +m[4]; 
+  nbEvt = +m[5]; 
+}
+
   }
 
   const COLS = ['Evt','Distance','Affaib.','Réflect.','Pente','Section','Bilan'];
@@ -545,7 +557,8 @@ function findNodeViaSite(graph, nodeCoords, term, maxDistM=3000){
     nodeNames.forEach(n=>{
       const c=nodeCoords[n]; // c[0] est la Latitude, c[1] est la Longitude
       // Correction de l'ordre : site.lat, site.lon, c[0], c[1]
-      const d=haversine(site.lat, site.lon, c[0], c[1]);
+     const d=haversine(site.lat, site.lon, c[0], c[1]);
+       //const d=haversine(site.lat, site.lon, c[0], c[1]);
       if(!best || d<best.dist) best={node:n, dist:d, site};
     });
     if(best && best.dist<=maxDistM) results.push(best);
