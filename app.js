@@ -1,8 +1,16 @@
 /* ============================================================
    OSP MANAGER - Application principale
    ============================================================ */
-import * as pdfjsLib from './pdf.min.mjs';
-pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs';
+//import * as pdfjsLib from './pdf.min.mjs';
+//pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
+
+/* ============================================================
+   OSP MANAGER - Application principale
+   ============================================================ */
+
+// Configuration du worker via le CDN universel pour smartphone
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
 
 const AppState = {
   files: [],       // enregistrements bruts (DB)
@@ -13,6 +21,7 @@ const AppState = {
   map: null,
   layers: {}
 };
+
 
 function isAnomalyEvent(ev, m){
   const isEndpoint = ev.num===1 || ev.num===(m.nbEvt || m.events?.length);
@@ -128,12 +137,22 @@ async function dbUpdate(rec){
 
 /* ---------------- PARSERS ---------------- */
 async function parsePDF(arrayBuffer){
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+    throw new Error("Le fichier PDF est vide ou invalide.");
+  }
+
   const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
   const page = await pdf.getPage(1);
   const content = await page.getTextContent();
-  const text = content.items.map(i=>i.str).join(' ').replace(/\s+/g,' ');
+  
+  // Correction du hachage de texte agressif sur mobile
+  const text = content.items.map(i => i.str).join('')
+    .replace(/\s+/g, ' ')
+    .replace(/Origi\s+ne/g, 'Origine')
+    .replace(/Extrémi\s+té/g, 'Extrémité')
+    .replace(/Réf\s+léct/g, 'Réflect');
 
-  const get=(re)=>{ const m=text.match(re); return m? m[1].trim() : null; };
+  const get=(re)=>{ const m=text.match(re); return m ? m[1].trim() : null; };
   const cable     = get(/Nom Câble\s*:\s*(.*?)\s*Nom Fibre/);
   const fibre     = get(/Nom Fibre\s*:\s*(\S+)/);
   const origine   = get(/Origine\s*:\s*(.*?)\s*Extrémité/);
@@ -146,57 +165,56 @@ async function parsePDF(arrayBuffer){
     if(m){ laser=+m[1]; bilanTotal=+m[2]; orl=+m[3]; finFibre=+m[4]; nbEvt=+m[5]; }
   }
 
-  // ---- Table des événements : extraction par POSITION (x/y), pas par texte linéaire ----
-  // Le tableau Evt/Distance/Affaib./Réflect./Pente/Section/Bilan est une grille 2D.
-  // pdf.js fournit transform[4]=x et transform[5]=y pour chaque item de texte.
   const COLS = ['Evt','Distance','Affaib.','Réflect.','Pente','Section','Bilan'];
   const items = content.items.filter(i=>i.str.trim()!=='').map(i=>({
     str:i.str.trim(), x:i.transform[4], y:i.transform[5]
   }));
 
-  // 1) localiser la ligne d'en-tête et les positions x de chaque colonne
-  const headerItems = items.filter(i=>COLS.includes(i.str));
   const events=[];
+  const headerItems = items.filter(i=>COLS.includes(i.str));
   if(headerItems.length>=4){
     const headerY = headerItems[0].y;
     const colX = {};
-    headerItems.forEach(h=>{ if(Math.abs(h.y-headerY)<2) colX[h.str]=h.x; });
+    // Tolérance accrue à 5 points pour les navigateurs mobiles
+    headerItems.forEach(h=>{ if(Math.abs(h.y-headerY)<5) colX[h.str]=h.x; });
 
-    // 2) regrouper les items situés sous l'en-tête en lignes (par y), tolérance 2pt
     const dataItems = items.filter(i=>i.y < headerY-2 && !/^(m|dB|dB\/km)$/.test(i.str));
     const rows={};
     dataItems.forEach(it=>{
-      const key = Object.keys(rows).find(k=>Math.abs(+k-it.y)<2);
+      const key = Object.keys(rows).find(k=>Math.abs(+k-it.y)<5);
       const k = key!==undefined ? key : it.y;
       (rows[k]=rows[k]||[]).push(it);
     });
 
-    // 3) trier les lignes du haut vers le bas (y décroissant) et assigner chaque item
-    //    à la colonne dont l'ancre x est la plus proche
     const colKeys = Object.keys(colX);
     Object.keys(rows).map(Number).sort((a,b)=>b-a).forEach(y=>{
       const row={};
       rows[y].forEach(it=>{
         let best=null, bestD=Infinity;
         colKeys.forEach(c=>{ const d=Math.abs(it.x-colX[c]); if(d<bestD){bestD=d; best=c;} });
-        if(bestD<20) row[best]=it.str;
+        if(bestD<25) row[best]=it.str;
       });
       if(row['Evt']!==undefined){
         events.push({
           num: parseInt(row['Evt'],10),
-          distance: row['Distance']!==undefined ? parseFloat(row['Distance']) : null,
-          affaib: row['Affaib.']!==undefined ? parseFloat(row['Affaib.']) : null,
-          reflect: row['Réflect.']!==undefined ? parseFloat(row['Réflect.']) : null,
-          pente: row['Pente']!==undefined ? parseFloat(row['Pente']) : null,
-          section: row['Section']!==undefined ? parseFloat(row['Section']) : null,
-          bilan: row['Bilan']!==undefined ? parseFloat(row['Bilan']) : null,
+          distance: row['Distance']!==undefined ? parseFloat(row['Distance'].replace(',','.')) : null,
+          affaib: row['Affaib.']!==undefined ? parseFloat(row['Affaib.'].replace(',','.')) : null,
+          reflect: row['Réflect.']!==undefined ? parseFloat(row['Réflect.'].replace(',','.')) : null,
+          pente: row['Pente']!==undefined ? parseFloat(row['Pente'].replace(',','.')) : null,
+          section: row['Section']!==undefined ? parseFloat(row['Section'].replace(',','.')) : null,
+          bilan: row['Bilan']!==undefined ? parseFloat(row['Bilan'].replace(',','.')) : null,
         });
       }
     });
   }
 
+  if (events.length === 0 && typeof toast === 'function') {
+    setTimeout(() => toast("Attention: Aucun événement détecté dans le PDF."), 500);
+  }
+
   return {cable, fibre, origine, extremite, laser, bilanTotal, orl, finFibre, nbEvt, events, rawText:text};
 }
+
 
 function parseKML(text, sourceName, sourceType){
   const doc = new DOMParser().parseFromString(text,'text/xml');
@@ -525,7 +543,8 @@ function findNodeViaSite(graph, nodeCoords, term, maxDistM=3000){
   matchingSites.forEach(site=>{
     let best=null;
     nodeNames.forEach(n=>{
-      const c=nodeCoords[n];
+      const c=nodeCoords[n]; // c[0] est la Latitude, c[1] est la Longitude
+      // Correction de l'ordre : site.lat, site.lon, c[0], c[1]
       const d=haversine(site.lat, site.lon, c[0], c[1]);
       if(!best || d<best.dist) best={node:n, dist:d, site};
     });
@@ -534,6 +553,7 @@ function findNodeViaSite(graph, nodeCoords, term, maxDistM=3000){
   results.sort((a,b)=>a.dist-b.dist);
   return results;
 }
+
 function dijkstra(graph, start, end){
   const dist={}, prev={};
   Object.keys(graph).forEach(n=>dist[n]=Infinity);
@@ -780,19 +800,23 @@ function renderMap(){
     }
   });
 
-  // Événements OTDR corrélés (toutes mesures)
   Object.entries(AppState.correlations||{}).forEach(([recId, result])=>{
-    if(!result || result.error) return;
+    if(!result || result.error || !result.placedEvents) return;
     const measure=AppState.measures.find(m=>m.recId==recId);
-    (result.placedEvents||[]).forEach(ev=>{
+    result.placedEvents.forEach(ev=>{
       if(!ev.pos) return;
+      const latPanne = parseFloat(ev.pos[0]);
+      const lonPanne = parseFloat(ev.pos[1]);
+      if(isNaN(latPanne) || isNaN(lonPanne)) return;
+
       const anom=measure?isAnomalyEvent(ev,measure):false;
-      L.circleMarker(ev.pos,{radius:7,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
-        .bindPopup(`<b>${measure?.cable||measure?.name||''}</b><br>Événement #${ev.num} — ${fmtNum(ev.distance,1)} m<br>${anom?'<span style="color:#ff5d5d">À vérifier</span><br>':''}<a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
+      L.circleMarker([latPanne, lonPanne],{radius:7,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
+        .bindPopup(`<b>${measure?.cable||measure?.name||''}</b><br>Événement #${ev.num} — ${fmtNum(ev.distance,1)} m<br>${anom?'<span style="color:#ff5d5d;font-weight:bold;">⚠️ À vérifier</span><br>':''}<button class="btn small secondary" style="width:100%;margin-top:6px;" onclick="navigateTo(${latPanne},${lonPanne})">🚗 Naviguer</button>`)
         .addTo(AppState.layers.events);
     });
   });
 }
+
 function drawCorrelationLayer(){
   if(!AppState.map || !AppState.activeCorrelation) return;
   AppState.layers.correlation.clearLayers();
@@ -800,8 +824,9 @@ function drawCorrelationLayer(){
   if(!AppState.layers.events._map) AppState.layers.events.addTo(AppState.map);
 
   const {result, measure}=AppState.activeCorrelation;
-  if(result.error) return;
+  if(result.error || !result.placedEvents) return;
   const allCoords=[];
+  
   result.path.forEach(step=>{
     const sec=AppState.sections.find(s=>s.id===step.sectionId);
     if(!sec) return;
@@ -810,16 +835,23 @@ function drawCorrelationLayer(){
     L.polyline(coords,{color:'#39d98a',weight:6,opacity:.9}).addTo(AppState.layers.correlation);
     allCoords.push(...coords);
   });
+
   result.placedEvents.forEach(ev=>{
     if(!ev.pos) return;
+    const latPanne = parseFloat(ev.pos[0]);
+    const lonPanne = parseFloat(ev.pos[1]);
+    if(isNaN(latPanne) || isNaN(lonPanne)) return;
+
     const anom=isAnomalyEvent(ev,measure);
-    L.circleMarker(ev.pos,{radius:7,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
-      .bindPopup(`<b>Événement #${ev.num}</b><br>Distance: ${fmtNum(ev.distance,1)} m<br><a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
+    L.circleMarker([latPanne, lonPanne],{radius:7,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
+      .bindPopup(`<b>Événement #${ev.num}</b><br>Distance: ${fmtNum(ev.distance,1)} m<br><button class="btn small secondary" style="width:100%;margin-top:6px;" onclick="navigateTo(${latPanne},${lonPanne})">🚗 Naviguer</button>`)
       .addTo(AppState.layers.events);
   });
+
   if(allCoords.length) AppState.map.fitBounds(L.latLngBounds(allCoords),{padding:[40,40]});
   toast('Corrélation affichée sur la carte');
 }
+
 
 /* ---------------- NAVIGATION TABS ---------------- */
 function switchView(name){
@@ -827,14 +859,20 @@ function switchView(name){
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+name).classList.add('active');
   document.querySelector(`.tab[data-view="${name}"]`).classList.add('active');
+  
   if(name==='carte'){
+    // Augmentation à 150ms pour stabiliser le rendu CSS sur smartphone
     setTimeout(()=>{
       initMap();
       renderMap();
+      if (AppState.activeCorrelation) {
+        drawCorrelationLayer();
+      }
       AppState.map.invalidateSize();
-    },50);
+    }, 150);
   }
 }
+
 
 /* ---------------- HEADER CONTEXT ---------------- */
 function updateHeader(){
@@ -908,3 +946,4 @@ window.addEventListener('DOMContentLoaded', async ()=>{
 window.navigateTo = navigateTo;
 window.showCorrelationOnMap = showCorrelationOnMap;
 window.focusSectionOnMap = focusSectionOnMap;
+window.drawCorrelationLayer = drawCorrelationLayer; // Sécurise l'exécution inline HTML
