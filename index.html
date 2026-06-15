@@ -285,8 +285,14 @@ a.linklike{color:var(--signal);text-decoration:none;}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="jszip.min.js"></script>
 <script type="module" src="app.js"></script>
-<script src="https://jsdelivr.net"></script>
-<script>eruda.init();</script>
+<head>
+    <!-- Ajoutez ceci juste ici pour forcer le chargement au tout début -->
+    <script src="https://cloudflare.com"></script>
+    <script>eruda.init();</script>
+    
+    <!-- Le reste de vos balises head (meta, title, css...) -->
+</head>
+
 
 </body>
 </html>
