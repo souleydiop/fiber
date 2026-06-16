@@ -493,14 +493,46 @@ function openMeasureDetail(m){
 }
 
 /* ---------------- CORRELATION ---------------- */
+
+// Pour une coordonnée GPS [lat,lon], trouve le site le plus proche dans base_site.kmz
+// Retourne {name, dist} ou null si aucun site chargé
+function nearestSite(lat, lon, maxDistM=1500){
+  const sites=AppState.points.filter(p=>p.category==='bts');
+  if(!sites.length) return null;
+  let best=null;
+  sites.forEach(p=>{
+    const d=haversine(lat, lon, p.lat, p.lon);
+    if(!best || d<best.dist) best={name:p.name, dist:d};
+  });
+  return (best && best.dist<=maxDistM) ? best : null;
+}
+
 function buildGraph(){
   const graph={}, nodeCoords={};
+  const hasSites=AppState.points.some(p=>p.category==='bts');
+
   AppState.sections.forEach(s=>{
-    if(!s.endA||!s.endB) return;
-    (graph[s.endA]=graph[s.endA]||[]).push({to:s.endB, w:s.length, sectionId:s.id});
-    (graph[s.endB]=graph[s.endB]||[]).push({to:s.endA, w:s.length, sectionId:s.id});
-    if(!nodeCoords[s.endA]) nodeCoords[s.endA]=s.coords[0];
-    if(!nodeCoords[s.endB]) nodeCoords[s.endB]=s.coords[s.coords.length-1];
+    let endA=s.endA, endB=s.endB;
+
+    // Si endA ou endB sont absents, les dériver par GPS depuis base_site.kmz
+    if(hasSites && (!endA || !endB)){
+      const firstCoord=s.coords[0];
+      const lastCoord=s.coords[s.coords.length-1];
+      if(!endA && firstCoord){
+        const site=nearestSite(firstCoord[0], firstCoord[1]);
+        if(site) endA=site.name;
+      }
+      if(!endB && lastCoord){
+        const site=nearestSite(lastCoord[0], lastCoord[1]);
+        if(site) endB=site.name;
+      }
+    }
+
+    if(!endA||!endB) return;
+    (graph[endA]=graph[endA]||[]).push({to:endB, w:s.length, sectionId:s.id});
+    (graph[endB]=graph[endB]||[]).push({to:endA, w:s.length, sectionId:s.id});
+    if(!nodeCoords[endA]) nodeCoords[endA]=s.coords[0];
+    if(!nodeCoords[endB]) nodeCoords[endB]=s.coords[s.coords.length-1];
   });
   return {graph, nodeCoords};
 }
