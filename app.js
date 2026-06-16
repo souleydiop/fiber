@@ -5,10 +5,11 @@ import * as pdfjsLib from './pdf.min.mjs';
 pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs';
 
 const AppState = {
-  files: [],       // enregistrements bruts (DB)
-  measures: [],    // {recId, name, date, ...parsedPDF}
-  sections: [],    // {id, name, endA, endB, type, coords, length, source}
-  points: [],      // {id, name, lat, lon, category, source}
+  files: [],
+  measures: [],
+  sections: [],
+  points: [],
+  siteMarkers: {},
   activeCorrelation: null,
   map: null,
   layers: {}
@@ -758,6 +759,7 @@ function initMap(){
   AppState.layers.correlation=L.layerGroup().addTo(AppState.map);
 }
 function renderMap(){
+  AppState.siteMarkers={};
   if(!AppState.map) return;
   ['sections','sites','joints','events'].forEach(k=>AppState.layers[k].clearLayers());
 
@@ -770,15 +772,17 @@ function renderMap(){
   AppState.points.forEach(p=>{
     const navBtn=`<button class="btn small secondary" style="margin-top:6px;" onclick="navigateTo(${p.lat},${p.lon})">🧭 Itinéraire</button>`;
     if(p.category==='bts'){
-      L.circleMarker([p.lat,p.lon],{radius:3,color:'#ffb454',fillColor:'#ffb454',fillOpacity:.8,weight:1})
+      const marker=L.circleMarker([p.lat,p.lon],{radius:3,color:'#ffb454',fillColor:'#ffb454',fillOpacity:.8,weight:1})
         .bindPopup(`<b>${p.name}</b><br>${navBtn}`)
         .addTo(AppState.layers.sites);
+      AppState.siteMarkers[p.name]=marker;
     } else if(p.category==='joint' || p.category==='chamber'){
       L.circleMarker([p.lat,p.lon],{radius:4,color:'#c98bff',fillColor:'#c98bff',fillOpacity:.9,weight:1})
         .bindPopup(`<b>${p.name}</b><br>${p.category==='joint'?'Joint':'Chambre'}<br>${navBtn}`)
         .addTo(AppState.layers.joints);
     }
   });
+  updateSiteSearchList();
 
   // Événements OTDR corrélés (toutes mesures)
   Object.entries(AppState.correlations||{}).forEach(([recId, result])=>{
@@ -859,6 +863,45 @@ function renderAll(){
   updateHeader();
 }
 
+/* ---------------- RECHERCHE SITE (CARTE) ---------------- */
+function updateSiteSearchList(){
+  const dl=document.getElementById('mapSiteList');
+  if(!dl) return;
+  const sites=AppState.points.filter(p=>p.category==='bts').sort((a,b)=>a.name.localeCompare(b.name));
+  dl.innerHTML=sites.map(p=>`<option value="${p.name}">`).join('');
+}
+
+function searchSite(){
+  const val=(document.getElementById('mapSearchInput').value||'').trim();
+  if(!val) return;
+  // correspondance exacte d'abord, puis partielle
+  const q=val.toUpperCase();
+  let found=AppState.points.find(p=>p.category==='bts' && p.name.toUpperCase()===q);
+  if(!found) found=AppState.points.find(p=>p.category==='bts' && p.name.toUpperCase().includes(q));
+  if(!found){ toast('Site introuvable : '+val); return; }
+
+  // activer la couche Sites si elle est masquée
+  const sitesLayer=AppState.layers.sites;
+  if(sitesLayer && !sitesLayer._map){
+    sitesLayer.addTo(AppState.map);
+    document.getElementById('layerSites').classList.add('on');
+  }
+  AppState.map.setView([found.lat,found.lon],16,{animate:true});
+  const marker=AppState.siteMarkers[found.name];
+  if(marker) marker.openPopup();
+  toast('📍 '+found.name);
+}
+
+function toggleMapSearch(){
+  const el=document.getElementById('mapSearch');
+  const visible=el.style.display!=='none' && el.style.display!=='';
+  el.style.display=visible?'none':'flex';
+  if(!visible){
+    document.getElementById('mapSearchInput').focus();
+    updateSiteSearchList();
+  }
+}
+
 /* ---------------- INIT ---------------- */
 window.addEventListener('DOMContentLoaded', async ()=>{
   document.querySelectorAll('.tab').forEach(btn=>{
@@ -872,6 +915,16 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   document.getElementById('sectionSearch').addEventListener('input',e=>renderSections(e.target.value));
   document.getElementById('detailOverlay').addEventListener('click',e=>{
     if(e.target.id==='detailOverlay') e.target.classList.remove('active');
+  });
+
+  document.getElementById('btnSearchSite').addEventListener('click', toggleMapSearch);
+  document.getElementById('mapSearchClose').addEventListener('click', ()=>{
+    document.getElementById('mapSearch').style.display='none';
+    document.getElementById('mapSearchInput').value='';
+  });
+  document.getElementById('mapSearchGo').addEventListener('click', searchSite);
+  document.getElementById('mapSearchInput').addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.preventDefault(); searchSite(); }
   });
 
   // layer toggles
@@ -908,3 +961,5 @@ window.addEventListener('DOMContentLoaded', async ()=>{
 window.navigateTo = navigateTo;
 window.showCorrelationOnMap = showCorrelationOnMap;
 window.focusSectionOnMap = focusSectionOnMap;
+window.searchSite = searchSite;
+window.toggleMapSearch = toggleMapSearch;
