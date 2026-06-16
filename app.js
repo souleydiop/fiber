@@ -592,59 +592,60 @@ function dijkstra(graph, start, end){
   }
   return {path, total:dist[end]};
 }
-function correlate(measure){
-  if(!AppState.sections.length) return {error:'Aucun fichier KML/KMZ de tracé chargé.'};
-  const {graph, nodeCoords}=buildGraph();
-  const origineEff = measure.manualOrigine || measure.origine;
-  const extremiteEff = measure.manualExtremite || measure.extremite;
-
-  // 1) correspondance directe avec un nœud du graphe (extrémité de section)
-  let startCands=findNodeCandidates(graph, origineEff).map(n=>({node:n}));
-  let endCands=findNodeCandidates(graph, extremiteEff).map(n=>({node:n}));
-
-  // 2) sinon, le terme désigne probablement un SITE (base_site.kmz) -> on cherche
-  //    le nœud de tracé géographiquement le plus proche de ce site
-  if(!startCands.length) startCands=findNodeViaSite(graph, nodeCoords, origineEff);
-  if(!endCands.length) endCands=findNodeViaSite(graph, nodeCoords, extremiteEff);
-
-  if(!startCands.length || !endCands.length){
-    const nodes=Object.keys(graph).slice(0,8).join(', ');
-    return {error:`Extrémités introuvables.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nAucun nœud de tracé ni site (base_site.kmz) correspondant à proximité.\nExemples de nœuds disponibles : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus (nom d'un site ou d'un point du tracé).`};
-  }
-  let best=null;
-  startCands.forEach(s=>endCands.forEach(e=>{
-    if(s.node===e.node) return;
-    const r=dijkstra(graph,s.node,e.node);
-    if(r){
-      const snapPenalty=(s.dist||0)+(e.dist||0);
-      const score = (measure.finFibre ? Math.abs(r.total-measure.finFibre) : r.total) + snapPenalty;
-      if(!best || score<best.score) best={...r, start:s.node, end:e.node, startSnap:s, endSnap:e, score};
-    }
-  }));
-  if(!best) return {error:'Aucun chemin continu trouvé entre les deux extrémités dans le tracé chargé.'};
-
-  // placement des événements le long du chemin
-  const placed=(measure.events||[]).map(ev=>{
-    let acc=0, pos=null, secName=null;
-    for(const step of best.path){
-      const sec=AppState.sections.find(s=>s.id===step.sectionId);
-      if(!sec){ continue; }
-      const isLast = step===best.path[best.path.length-1];
-      if(ev.distance<=acc+sec.length+0.001 || isLast){
-        let coords=sec.coords;
-        if(step.from===sec.endB) coords=[...coords].reverse();
-        const within=Math.min(sec.length, Math.max(0, ev.distance-acc));
-        pos=interpolateAlong(coords, within);
-        secName=sec.name;
-        break;
-      }
-      acc+=sec.length;
-    }
-    return {...ev, pos, sectionName:secName};
-  });
-
-  return {path:best.path, total:best.total, start:best.start, end:best.end, placedEvents:placed};
+/* --- Recherche géographique optimisée --- */
+function findClosestNode(nodeCoords, site, maxDistM=3000) {
+    let best = null;
+    Object.keys(nodeCoords).forEach(n => {
+        const d = haversine(site.lat, site.lon, nodeCoords[n][0], nodeCoords[n][1]);
+        if (d < maxDistM && (!best || d < best.dist)) {
+            best = { node: n, dist: d };
+        }
+    });
+    return best;
 }
+
+function correlate(measure) {
+    const { graph, nodeCoords } = buildGraph();
+    const startTerm = measure.manualOrigine || measure.origine;
+    const endTerm = measure.manualExtremite || measure.extremite;
+
+    // 1. Trouver les sites correspondants
+    const siteA = AppState.points.find(p => norm(p.name).includes(norm(startTerm)));
+    const siteB = AppState.points.find(p => norm(p.name).includes(norm(endTerm)));
+
+    if (!siteA || !siteB) return { error: "Site de départ ou d'arrivée introuvable dans la base." };
+
+    // 2. Snap sur les nœuds de fibre les plus proches
+    const startSnap = findClosestNode(nodeCoords, siteA);
+    const endSnap = findClosestNode(nodeCoords, siteB);
+
+    if (!startSnap || !endSnap) return { error: "Aucune fibre trouvée à proximité des sites." };
+
+    // 3. Dijkstra
+    const route = dijkstra(graph, startSnap.node, endSnap.node);
+    if (!route) return { error: "Pas de continuité physique entre ces deux sites." };
+
+    // 4. Mapper les événements
+    const placedEvents = (measure.events || []).map(ev => {
+        let acc = 0;
+        let pos = null;
+        for (const step of route.path) {
+            const sec = AppState.sections.find(s => s.id === step.sectionId);
+            if (!sec) continue;
+            
+            if (ev.distance <= acc + sec.length) {
+                const coords = (step.from === sec.endB) ? [...sec.coords].reverse() : sec.coords;
+                pos = interpolateAlong(coords, ev.distance - acc);
+                return { ...ev, pos, sectionName: sec.name };
+            }
+            acc += sec.length;
+        }
+        return { ...ev, pos: null };
+    });
+
+    return { ...route, placedEvents };
+}
+
 
 function renderCorrelationResult(result, measure){
   const div=document.getElementById('corrResult');
