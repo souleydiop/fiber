@@ -592,59 +592,62 @@ function dijkstra(graph, start, end){
   }
   return {path, total:dist[end]};
 }
-function correlate(measure){
-  if(!AppState.sections.length) return {error:'Aucun fichier KML/KMZ de tracé chargé.'};
-  const {graph, nodeCoords}=buildGraph();
-  const origineEff = measure.manualOrigine || measure.origine;
-  const extremiteEff = measure.manualExtremite || measure.extremite;
+/* --- Code forcé pour corrélation Mesure -> Site -> Distance --- */
 
-  // 1) correspondance directe avec un nœud du graphe (extrémité de section)
-  let startCands=findNodeCandidates(graph, origineEff).map(n=>({node:n}));
-  let endCands=findNodeCandidates(graph, extremiteEff).map(n=>({node:n}));
+function correlate(measure) {
+    if (!AppState.sections.length) return { error: 'Aucun tracé KML chargé.' };
+    
+    // 1. Récupération des points d'ancrage (Forcés manuellement si besoin)
+    const startName = measure.manualOrigine || measure.origine;
+    const endName = measure.manualExtremite || measure.extremite;
 
-  // 2) sinon, le terme désigne probablement un SITE (base_site.kmz) -> on cherche
-  //    le nœud de tracé géographiquement le plus proche de ce site
-  if(!startCands.length) startCands=findNodeViaSite(graph, nodeCoords, origineEff);
-  if(!endCands.length) endCands=findNodeViaSite(graph, nodeCoords, extremiteEff);
+    // 2. Recherche directe des sites dans la base (ignore le nom des sections KML)
+    const siteStart = AppState.points.find(p => norm(p.name).includes(norm(startName)));
+    const siteEnd = AppState.points.find(p => norm(p.name).includes(norm(endName)));
 
-  if(!startCands.length || !endCands.length){
-    const nodes=Object.keys(graph).slice(0,8).join(', ');
-    return {error:`Extrémités introuvables.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nAucun nœud de tracé ni site (base_site.kmz) correspondant à proximité.\nExemples de nœuds disponibles : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus (nom d'un site ou d'un point du tracé).`};
-  }
-  let best=null;
-  startCands.forEach(s=>endCands.forEach(e=>{
-    if(s.node===e.node) return;
-    const r=dijkstra(graph,s.node,e.node);
-    if(r){
-      const snapPenalty=(s.dist||0)+(e.dist||0);
-      const score = (measure.finFibre ? Math.abs(r.total-measure.finFibre) : r.total) + snapPenalty;
-      if(!best || score<best.score) best={...r, start:s.node, end:e.node, startSnap:s, endSnap:e, score};
+    if (!siteStart || !siteEnd) {
+        return { error: `Site introuvable dans la base : ${startName} ou ${endName}` };
     }
-  }));
-  if(!best) return {error:'Aucun chemin continu trouvé entre les deux extrémités dans le tracé chargé.'};
 
-  // placement des événements le long du chemin
-  const placed=(measure.events||[]).map(ev=>{
-    let acc=0, pos=null, secName=null;
-    for(const step of best.path){
-      const sec=AppState.sections.find(s=>s.id===step.sectionId);
-      if(!sec){ continue; }
-      const isLast = step===best.path[best.path.length-1];
-      if(ev.distance<=acc+sec.length+0.001 || isLast){
-        let coords=sec.coords;
-        if(step.from===sec.endB) coords=[...coords].reverse();
-        const within=Math.min(sec.length, Math.max(0, ev.distance-acc));
-        pos=interpolateAlong(coords, within);
-        secName=sec.name;
-        break;
-      }
-      acc+=sec.length;
+    // 3. Identification du nœud de fibre le plus proche (Snap géographique)
+    const { graph, nodeCoords } = buildGraph();
+    const startNode = findClosestNode(nodeCoords, siteStart);
+    const endNode = findClosestNode(nodeCoords, siteEnd);
+
+    if (!startNode || !endNode) {
+        return { error: 'Aucune fibre trouvée à proximité des sites.' };
     }
-    return {...ev, pos, sectionName:secName};
-  });
 
-  return {path:best.path, total:best.total, start:best.start, end:best.end, placedEvents:placed};
+    // 4. Dijkstra : Calcul du chemin physique
+    const route = dijkstra(graph, startNode.node, endNode.node);
+    if (!route) return { error: 'Aucune continuité physique entre ces sites.' };
+
+    // 5. Projection : Mapping de la distance du PDF sur la géométrie
+    // On ignore le nom des sections, on utilise uniquement la distance cumulée
+    return projectMeasureOnRoute(route, measure);
 }
+
+function projectMeasureOnRoute(route, measure) {
+    // Cette fonction projette les événements (ex: 13940.45m) sur les coordonnées 
+    // des segments (LineString) composant le chemin 'route'
+    let totalDist = 0;
+    const placedEvents = (measure.events || []).map(ev => {
+        let pos = null;
+        for (const step of route.path) {
+            const section = AppState.sections.find(s => s.id === step.sectionId);
+            if (ev.distance <= totalDist + section.length) {
+                // Interpolation sur la ligne
+                pos = interpolateAlong(section.coords, ev.distance - totalDist);
+                return { ...ev, pos };
+            }
+            totalDist += section.length;
+        }
+        return { ...ev, pos };
+    });
+    
+    return { ...route, placedEvents };
+}
+
 
 function renderCorrelationResult(result, measure){
   const div=document.getElementById('corrResult');
