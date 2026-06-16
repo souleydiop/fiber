@@ -495,15 +495,54 @@ function openMeasureDetail(m){
 /* ---------------- CORRELATION ---------------- */
 function buildGraph(){
   const graph={}, nodeCoords={};
+  
   AppState.sections.forEach(s=>{
-    if(!s.endA||!s.endB) return;
-    (graph[s.endA]=graph[s.endA]||[]).push({to:s.endB, w:s.length, sectionId:s.id});
-    (graph[s.endB]=graph[s.endB]||[]).push({to:s.endA, w:s.length, sectionId:s.id});
-    if(!nodeCoords[s.endA]) nodeCoords[s.endA]=s.coords[0];
-    if(!nodeCoords[s.endB]) nodeCoords[s.endB]=s.coords[s.coords.length-1];
+    if(!s.coords || s.coords.length < 2) return;
+    
+    // 1. Trouver le site le plus proche pour le premier point de la section (Extrémité A)
+    const firstCoord = s.coords[0];
+    let bestDistA = Infinity;
+    let bestSiteA = null;
+    
+    AppState.points.forEach(p => {
+      const d = haversine(firstCoord[0], firstCoord[1], p.lat, p.lon);
+      if (d < bestDistA) {
+        bestDistA = d;
+        bestSiteA = p;
+      }
+    });
+    
+    // 2. Trouver le site le plus proche pour le dernier point de la section (Extrémité B)
+    const lastCoord = s.coords[s.coords.length - 1];
+    let bestDistB = Infinity;
+    let bestSiteB = null;
+    
+    AppState.points.forEach(p => {
+      const d = haversine(lastCoord[0], lastCoord[1], p.lat, p.lon);
+      if (d < bestDistB) {
+        bestDistB = d;
+        bestSiteB = p;
+      }
+    });
+    
+    // Sécurité : si un côté n'a pas de site proche, ou si la section boucle sur un même site
+    if(!bestSiteA || !bestSiteB || bestSiteA.name === bestSiteB.name) return;
+    
+    const nameA = bestSiteA.name;
+    const nameB = bestSiteB.name;
+    
+    // 3. Insertion dans le graphe : Les clés sont STRICTEMENT des noms de sites
+    (graph[nameA] = graph[nameA] || []).push({ to: nameB, w: s.length, sectionId: s.id });
+    (graph[nameB] = graph[nameB] || []).push({ to: nameA, w: s.length, sectionId: s.id });
+    
+    // Enregistrement des coordonnées des nœuds (on prend les coordonnées réelles des sites)
+    if(!nodeCoords[nameA]) nodeCoords[nameA] = [bestSiteA.lat, bestSiteA.lon];
+    if(!nodeCoords[nameB]) nodeCoords[nameB] = [bestSiteB.lat, bestSiteB.lon];
   });
+  
   return {graph, nodeCoords};
 }
+
 function norm(t){ return (t||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
 function findNodeCandidates(graph, term){
   if(!term) return [];
@@ -512,29 +551,33 @@ function findNodeCandidates(graph, term){
 }
 // Cherche le(s) nœud(s) du graphe de tracé les plus proches d'un terme désignant un SITE
 // (ex: "KARANG" -> site "KARANG_POSTE_G" dans base_site.kmz -> nœud fibre le plus proche)
-function findNodeViaSite(graph, nodeCoords, term, maxDistM=3000){
+function findNodeViaSite(graph, nodeCoords, term){
   if(!term) return [];
   const t=norm(term);
-  const matchingSites=AppState.points.filter(p=>{
-    const pn=norm(p.name);
+  if(t.length < 2) return [];
+  
+  // Trouve le ou les sites dont le nom correspond à la saisie de l'OTDR
+  const matchingSites = AppState.points.filter(p => {
+    const pn = norm(p.name);
     return pn.includes(t) || t.includes(pn);
   });
   if(!matchingSites.length) return [];
-  const nodeNames=Object.keys(nodeCoords);
-  if(!nodeNames.length) return [];
-  const results=[];
-  matchingSites.forEach(site=>{
-    let best=null;
-    nodeNames.forEach(n=>{
-      const c=nodeCoords[n];
-      const d=haversine(site.lat, site.lon, c[0], c[1]);
-      if(!best || d<best.dist) best={node:n, dist:d, site};
-    });
-    if(best && best.dist<=maxDistM) results.push(best);
+  
+  const results = [];
+  matchingSites.forEach(site => {
+    // Si le site trouvé possède bien une correspondance active dans le graphe de fibre
+    if (nodeCoords[site.name]) {
+      results.push({
+        node: site.name, 
+        dist: 0, // Distance de raccordement nulle car le nœud EST le site
+        site: site
+      });
+    }
   });
-  results.sort((a,b)=>a.dist-b.dist);
+  
   return results;
 }
+
 function dijkstra(graph, start, end){
   const dist={}, prev={};
   Object.keys(graph).forEach(n=>dist[n]=Infinity);
