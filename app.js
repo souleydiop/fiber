@@ -495,88 +495,6 @@ function openMeasureDetail(m){
 /* ---------------- CORRELATION ---------------- */
 function buildGraph(){
   const graph={}, nodeCoords={};
-  
-  AppState.sections.forEach(s=>{
-    if(!s.coords || s.coords.length < 2) return;
-    
-    // 1. Trouver le site le plus proche pour le premier point de la section (Extrémité A)
-    const firstCoord = s.coords[0];
-    let bestDistA = Infinity;
-    let bestSiteA = null;
-    
-    AppState.points.forEach(p => {
-      const d = haversine(firstCoord[0], firstCoord[1], p.lat, p.lon);
-      if (d < bestDistA) {
-        bestDistA = d;
-        bestSiteA = p;
-      }
-    });
-    
-    // 2. Trouver le site le plus proche pour le dernier point de la section (Extrémité B)
-    const lastCoord = s.coords[s.coords.length - 1];
-    let bestDistB = Infinity;
-    let bestSiteB = null;
-    
-    AppState.points.forEach(p => {
-      const d = haversine(lastCoord[0], lastCoord[1], p.lat, p.lon);
-      if (d < bestDistB) {
-        bestDistB = d;
-        bestSiteB = p;
-      }
-    });
-    
-    // Sécurité : si un côté n'a pas de site proche, ou si la section boucle sur un même site
-    if(!bestSiteA || !bestSiteB || bestSiteA.name === bestSiteB.name) return;
-    
-    const nameA = bestSiteA.name;
-    const nameB = bestSiteB.name;
-    
-    // 3. Insertion dans le graphe : Les clés sont STRICTEMENT des noms de sites
-    (graph[nameA] = graph[nameA] || []).push({ to: nameB, w: s.length, sectionId: s.id });
-    (graph[nameB] = graph[nameB] || []).push({ to: nameA, w: s.length, sectionId: s.id });
-    
-    // Enregistrement des coordonnées des nœuds (on prend les coordonnées réelles des sites)
-    if(!nodeCoords[nameA]) nodeCoords[nameA] = [bestSiteA.lat, bestSiteA.lon];
-    if(!nodeCoords[nameB]) nodeCoords[nameB] = [bestSiteB.lat, bestSiteB.lon];
-  });
-  
-  return {graph, nodeCoords};
-}
-
-function norm(t){ return (t||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
-function findNodeCandidates(graph, term){
-  if(!term) return [];
-  const t=norm(term);
-  return Object.keys(graph).filter(n=>norm(n).includes(t) || t.includes(norm(n)));
-}
-// Cherche le(s) nœud(s) du graphe de tracé les plus proches d'un terme désignant un SITE
-// (ex: "KARANG" -> site "KARANG_POSTE_G" dans base_site.kmz -> nœud fibre le plus proche)
-function findNodeViaSite(graph, nodeCoords, term){
-  if(!term) return [];
-  const t=norm(term);
-  if(t.length < 2) return [];
-  
-  // Trouve le ou les sites dont le nom correspond à la saisie de l'OTDR
-  const matchingSites = AppState.points.filter(p => {
-    const pn = norm(p.name);
-    return pn.includes(t) || t.includes(pn);
-  });
-  if(!matchingSites.length) return [];
-  
-  const results = [];
-  matchingSites.forEach(site => {
-    // Si le site trouvé possède bien une correspondance active dans le graphe de fibre
-    if (nodeCoords[site.name]) {
-      results.push({
-        node: site.name, 
-        dist: 0, // Distance de raccordement nulle car le nœud EST le site
-        site: site
-      });
-    }
-  });
-/* ---------------- CORRELATION ---------------- */
-function buildGraph(){
-  const graph={}, nodeCoords={};
   AppState.sections.forEach(s=>{
     if(!s.endA||!s.endB) return;
     (graph[s.endA]=graph[s.endA]||[]).push({to:s.endB, w:s.length, sectionId:s.id});
@@ -586,73 +504,37 @@ function buildGraph(){
   });
   return {graph, nodeCoords};
 }
-
 function norm(t){ return (t||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
-
-// Dictionnaire des alias métiers pour lier l'OTDR à la base site
-const TELECOM_ALIASES = {
-  "THS": "THIES",
-  "KLK": "KAOLACK",
-  "KAF": "KAFFRINE",
-  "FAT": "FATICK",
-  "DKR": "DAKAR",
-  "TAM": "TAMBACOUNDA",
-  "SL": "SAINTLOUIS",
-  "ZIG": "ZIGUINCHOR",
-  "MBR": "MBOUR"
-};
-
-// Extrait intelligemment la racine du texte (ex: "MBOUR01_G" -> "MBOUR")
-function getSearchTokens(term) {
-  if (!term) return [];
-  let str = norm(term);
-  const tokens = [str];
-  
-  const baseMatch = term.toUpperCase().match(/^[A-Z]+/);
-  if (baseMatch && baseMatch[0].length >= 3) {
-    const root = baseMatch[0];
-    tokens.push(root);
-    if (TELECOM_ALIASES[root]) tokens.push(TELECOM_ALIASES[root]);
-  }
-  
-  for (const [tri, full] of Object.entries(TELECOM_ALIASES)) {
-    if (str.includes(full)) tokens.push(tri);
-    if (str.includes(tri)) tokens.push(full);
-  }
-  return [...new Set(tokens)];
-}
-
-// Fonction exclusive : Trouve un site, puis accroche la section KML dans son rayon
-function findGeographicStartEnds(nodeCoords, term, maxDistM=3000){
+function findNodeCandidates(graph, term){
   if(!term) return [];
-  const tokens = getSearchTokens(term);
-  
-  // 1. Cherche STRICTEMENT dans la liste des sites (base_site)
-  const matchingSites = AppState.points.filter(p => {
-    const pn = norm(p.name);
-    return tokens.some(tok => pn.includes(tok) || tok.includes(pn));
+  const t=norm(term);
+  return Object.keys(graph).filter(n=>norm(n).includes(t) || t.includes(norm(n)));
+}
+// Cherche le(s) nœud(s) du graphe de tracé les plus proches d'un terme désignant un SITE
+// (ex: "KARANG" -> site "KARANG_POSTE_G" dans base_site.kmz -> nœud fibre le plus proche)
+function findNodeViaSite(graph, nodeCoords, term, maxDistM=3000){
+  if(!term) return [];
+  const t=norm(term);
+  const matchingSites=AppState.points.filter(p=>{
+    const pn=norm(p.name);
+    return pn.includes(t) || t.includes(pn);
   });
-  
   if(!matchingSites.length) return [];
-  
-  // 2. Trouve la ou les sections de fibre qui démarrent/passent dans le rayon de ces sites
-  const nodeNames = Object.keys(nodeCoords);
-  const results = [];
-  
-  matchingSites.forEach(site => {
-    let best = null;
-    nodeNames.forEach(n => {
-      const c = nodeCoords[n];
-      const d = haversine(site.lat, site.lon, c[0], c[1]);
-      if(!best || d < best.dist) best = {node: n, dist: d, site};
+  const nodeNames=Object.keys(nodeCoords);
+  if(!nodeNames.length) return [];
+  const results=[];
+  matchingSites.forEach(site=>{
+    let best=null;
+    nodeNames.forEach(n=>{
+      const c=nodeCoords[n];
+      const d=haversine(site.lat, site.lon, c[0], c[1]);
+      if(!best || d<best.dist) best={node:n, dist:d, site};
     });
-    if(best && best.dist <= maxDistM) results.push(best);
+    if(best && best.dist<=maxDistM) results.push(best);
   });
-  
   results.sort((a,b)=>a.dist-b.dist);
   return results;
 }
-
 function dijkstra(graph, start, end){
   const dist={}, prev={};
   Object.keys(graph).forEach(n=>dist[n]=Infinity);
@@ -678,37 +560,38 @@ function dijkstra(graph, start, end){
   }
   return {path, total:dist[end]};
 }
-
 function correlate(measure){
   if(!AppState.sections.length) return {error:'Aucun fichier KML/KMZ de tracé chargé.'};
-  const {graph, nodeCoords} = buildGraph();
+  const {graph, nodeCoords}=buildGraph();
   const origineEff = measure.manualOrigine || measure.origine;
   const extremiteEff = measure.manualExtremite || measure.extremite;
 
-  // Remplacement de la logique : La corrélation par nomenclature est abolie.
-  // On passe UNIQUEMENT par la recherche géographique basée sur le site.
-  const startCands = findGeographicStartEnds(nodeCoords, origineEff);
-  const endCands = findGeographicStartEnds(nodeCoords, extremiteEff);
+  // 1) correspondance directe avec un nœud du graphe (extrémité de section)
+  let startCands=findNodeCandidates(graph, origineEff).map(n=>({node:n}));
+  let endCands=findNodeCandidates(graph, extremiteEff).map(n=>({node:n}));
+
+  // 2) sinon, le terme désigne probablement un SITE (base_site.kmz) -> on cherche
+  //    le nœud de tracé géographiquement le plus proche de ce site
+  if(!startCands.length) startCands=findNodeViaSite(graph, nodeCoords, origineEff);
+  if(!endCands.length) endCands=findNodeViaSite(graph, nodeCoords, extremiteEff);
 
   if(!startCands.length || !endCands.length){
-    return {error:`Extrémités introuvables.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\n\nAucun site correspondant n'a été trouvé, ou aucune section de fibre ne se trouve dans un rayon de 3 km de ces sites.\n→ Saisis manuellement le nom exact d'un site ci-dessus.`};
+    const nodes=Object.keys(graph).slice(0,8).join(', ');
+    return {error:`Extrémités introuvables.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nAucun nœud de tracé ni site (base_site.kmz) correspondant à proximité.\nExemples de nœuds disponibles : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus (nom d'un site ou d'un point du tracé).`};
   }
-
   let best=null;
   startCands.forEach(s=>endCands.forEach(e=>{
     if(s.node===e.node) return;
     const r=dijkstra(graph,s.node,e.node);
     if(r){
-      // On pénalise les fibres qui sont géographiquement plus éloignées du site réel
       const snapPenalty=(s.dist||0)+(e.dist||0);
       const score = (measure.finFibre ? Math.abs(r.total-measure.finFibre) : r.total) + snapPenalty;
       if(!best || score<best.score) best={...r, start:s.node, end:e.node, startSnap:s, endSnap:e, score};
     }
   }));
-  
-  if(!best) return {error:'Aucun chemin continu trouvé entre les deux sites dans le tracé chargé.'};
+  if(!best) return {error:'Aucun chemin continu trouvé entre les deux extrémités dans le tracé chargé.'};
 
-  // Le reste du code de placement des événements reste identique
+  // placement des événements le long du chemin
   const placed=(measure.events||[]).map(ev=>{
     let acc=0, pos=null, secName=null;
     for(const step of best.path){
@@ -730,7 +613,6 @@ function correlate(measure){
 
   return {path:best.path, total:best.total, start:best.start, end:best.end, placedEvents:placed};
 }
-
 
 function renderCorrelationResult(result, measure){
   const div=document.getElementById('corrResult');
