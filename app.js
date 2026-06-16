@@ -397,24 +397,30 @@ function openMeasureDetail(m){
     <h2>Corrélation avec le tracé KML</h2>
 
     <div class="card" style="margin-bottom:8px;">
-      <p class="sub" style="margin-bottom:8px;">Saisis le site de départ et d'arrivée (liste des sites importés) pour la corrélation :</p>
-      <div style="display:flex;flex-direction:column;gap:8px;">
+      <p class="sub" style="margin-bottom:10px;">Sélectionne les sites de départ et d'arrivée dans la liste des sites importés (base_site.kmz).</p>
+
+      <div style="display:flex;flex-direction:column;gap:10px;">
+
         <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité A — Site de départ</label>
-          <input id="inpOrigine" list="siteListA" autocomplete="off" placeholder="${m.origine||'ex: KLK_AGENCE_G'}"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
-          <datalist id="siteListA"></datalist>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Site A — Origine</label>
+          <select id="selOrigine" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
+            <option value="">— choisir un site —</option>
+          </select>
+          <div id="feedbackA" style="font-size:11px;color:var(--muted);margin-top:3px;min-height:16px;"></div>
         </div>
+
         <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité B — Site d'arrivée</label>
-          <input id="inpExtremite" list="siteListB" autocomplete="off" placeholder="${m.extremite||'ex: KARANG_POSTE_G'}"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
-          <datalist id="siteListB"></datalist>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Site B — Extrémité</label>
+          <select id="selExtremite" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
+            <option value="">— choisir un site —</option>
+          </select>
+          <div id="feedbackB" style="font-size:11px;color:var(--muted);margin-top:3px;min-height:16px;"></div>
         </div>
       </div>
-      <div style="display:flex;gap:8px;margin-top:10px;">
-        <button class="btn" id="btnCorrelate" style="flex:1;">Lancer la corrélation</button>
-        <button class="btn secondary" id="btnSaveEndpoints" style="flex:0 0 auto;width:auto;padding:10px 14px;">💾 Sauvegarder</button>
+
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btn" id="btnCorrelate" style="flex:1;">📡 Corréler et afficher sur la carte</button>
+        <button class="btn secondary" id="btnSaveEndpoints" style="padding:10px 14px;">💾</button>
       </div>
     </div>
 
@@ -423,49 +429,67 @@ function openMeasureDetail(m){
   document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
 
-  // Datalist : liste des sites issus des KMZ importés (base_site.kmz etc.)
-  const siteNames=[...new Set(AppState.points.map(p=>p.name))].sort();
-  function fillSiteList(elId){
-    const dl=document.getElementById(elId);
-    dl.innerHTML='';
+  // Remplie les sélecteurs avec les sites base_site.kmz
+  const siteNames=[...new Set(AppState.points.filter(p=>p.category==='bts').map(p=>p.name))].sort();
+  function fillSelect(selId, currentVal){
+    const sel=document.getElementById(selId);
+    sel.innerHTML='<option value="">— choisir un site —</option>';
     siteNames.forEach(n=>{
-      const opt=document.createElement('option'); opt.value=n; dl.appendChild(opt);
+      const opt=document.createElement('option');
+      opt.value=n; opt.textContent=n;
+      if(n===currentVal) opt.selected=true;
+      sel.appendChild(opt);
     });
   }
-  fillSiteList('siteListA');
-  fillSiteList('siteListB');
 
-  // Pré-remplissage : valeur manuelle sauvegardée, sinon meilleure correspondance avec le PDF
-  function bestGuess(term){
+  // Trouve la meilleure correspondance site pour un terme PDF (pré-sélection)
+  function bestSiteMatch(term){
     if(!term) return '';
     const t=norm(term);
-    let exact=siteNames.find(n=>norm(n)===t);
-    if(exact) return exact;
-    let partial=siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)));
-    return partial||term;
+    return siteNames.find(n=>norm(n)===t)
+      || siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))
+      || '';
   }
 
-  document.getElementById('inpOrigine').value = m.manualOrigine || bestGuess(m.origine);
-  document.getElementById('inpExtremite').value = m.manualExtremite || bestGuess(m.extremite);
+  const initA = m.manualOrigine || bestSiteMatch(m.origine);
+  const initB = m.manualExtremite || bestSiteMatch(m.extremite);
+  fillSelect('selOrigine', initA);
+  fillSelect('selExtremite', initB);
 
-  // Focus outline sur les inputs
-  ['inpOrigine','inpExtremite'].forEach(id=>{
-    document.getElementById(id).addEventListener('focus',e=>{e.target.style.outline='1px solid var(--signal)';});
-    document.getElementById(id).addEventListener('blur',e=>{e.target.style.outline='';});
-  });
+  // Feedback GPS : nœud le plus proche du site sélectionné
+  function showFeedback(feedbackId, siteName){
+    const el=document.getElementById(feedbackId);
+    if(!siteName){ el.textContent=''; return; }
+    const site=AppState.points.find(p=>p.name===siteName);
+    if(!site){ el.textContent=''; return; }
+    const {graph, nodeCoords}=buildGraph();
+    const candidates=findNodeViaSite(graph, nodeCoords, siteName);
+    if(candidates.length){
+      const c=candidates[0];
+      el.innerHTML=`<span style="color:var(--fiber)">✓ Nœud trouvé : <b>${c.node}</b> (${c.dist} m)</span>`;
+    } else {
+      el.innerHTML=`<span style="color:var(--fault)">⚠ Aucun nœud de tracé à proximité (KML chargé ?)</span>`;
+    }
+  }
 
-  // Sauvegarde manuelle des extrémités dans IndexedDB
+  // Feedback immédiat à la sélection
+  document.getElementById('selOrigine').addEventListener('change', e=>showFeedback('feedbackA', e.target.value));
+  document.getElementById('selExtremite').addEventListener('change', e=>showFeedback('feedbackB', e.target.value));
+
+  // Afficher feedback initial si déjà pré-sélectionné
+  if(initA) showFeedback('feedbackA', initA);
+  if(initB) showFeedback('feedbackB', initB);
+
+  // Sauvegarde
   document.getElementById('btnSaveEndpoints').addEventListener('click', async ()=>{
-    const a=document.getElementById('inpOrigine').value.trim();
-    const b=document.getElementById('inpExtremite').value.trim();
-    // Mettre à jour le record en DB
+    const a=document.getElementById('selOrigine').value;
+    const b=document.getElementById('selExtremite').value;
     const recs=await dbGetAll();
     const rec=recs.find(r=>r.id===m.recId);
     if(rec){
       rec.manualOrigine=a||null;
       rec.manualExtremite=b||null;
       await dbUpdate(rec);
-      // Mettre à jour AppState
       m.manualOrigine=a||null;
       m.manualExtremite=b||null;
       await loadAll();
@@ -473,22 +497,27 @@ function openMeasureDetail(m){
     }
   });
 
-  // Récupérer la corrélation en cache (avec les endpoints manuels déjà appliqués)
+  // Corrélation + affichage automatique sur la carte
   const cached=AppState.correlations[m.recId];
   if(cached) renderCorrelationResult(cached, m);
 
   document.getElementById('btnCorrelate').addEventListener('click',()=>{
-    // Lire les valeurs en cours dans les inputs (même non sauvegardées)
-    const a=document.getElementById('inpOrigine').value.trim();
-    const b=document.getElementById('inpExtremite').value.trim();
-    const mEff={...m,
-      manualOrigine: a||m.manualOrigine||null,
-      manualExtremite: b||m.manualExtremite||null
-    };
+    const a=document.getElementById('selOrigine').value;
+    const b=document.getElementById('selExtremite').value;
+    if(!a||!b){ toast('Sélectionne les deux sites'); return; }
+    const mEff={...m, manualOrigine:a, manualExtremite:b};
     const result=correlate(mEff);
     AppState.correlations[m.recId]=result;
     AppState.activeCorrelation={result, measure:mEff};
     renderCorrelationResult(result, mEff);
+    // Projection automatique sur la carte si succès
+    if(!result.error){
+      setTimeout(()=>{
+        document.getElementById('detailOverlay').classList.remove('active');
+        switchView('carte');
+        drawCorrelationLayer();
+      }, 400);
+    }
   });
 }
 
