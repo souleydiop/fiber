@@ -397,30 +397,23 @@ function openMeasureDetail(m){
     <h2>Corrélation avec le tracé KML</h2>
 
     <div class="card" style="margin-bottom:8px;">
-      <p class="sub" style="margin-bottom:10px;">Sélectionne les sites de départ et d'arrivée dans la liste des sites importés (base_site.kmz).</p>
-
-      <div style="display:flex;flex-direction:column;gap:10px;">
-
+      <p class="sub" style="margin-bottom:10px;">Origine = point de départ OTDR · Extrémité = point d'arrivée</p>
+      <div style="display:flex;flex-direction:column;gap:8px;">
         <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Site A — Origine</label>
-          <select id="selOrigine" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
-            <option value="">— choisir un site —</option>
-          </select>
-          <div id="feedbackA" style="font-size:11px;color:var(--muted);margin-top:3px;min-height:16px;"></div>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Origine (site, nœud ou section)</label>
+          <input id="inpOrigine" list="endpointList" autocomplete="off" placeholder="${m.origine||'ex: KLK02_COMMUT'}"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
         </div>
-
         <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Site B — Extrémité</label>
-          <select id="selExtremite" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
-            <option value="">— choisir un site —</option>
-          </select>
-          <div id="feedbackB" style="font-size:11px;color:var(--muted);margin-top:3px;min-height:16px;"></div>
+          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité (site, nœud ou section)</label>
+          <input id="inpExtremite" list="endpointList" autocomplete="off" placeholder="${m.extremite||'ex: KAFFRINE01'}"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;font-family:ui-monospace,Menlo,monospace;">
         </div>
+        <datalist id="endpointList"></datalist>
       </div>
-
-      <div style="display:flex;gap:8px;margin-top:12px;">
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
         <button class="btn" id="btnCorrelate" style="flex:1;">📡 Corréler et afficher sur la carte</button>
-        <button class="btn secondary" id="btnSaveEndpoints" style="padding:10px 14px;">💾</button>
+        <button class="btn secondary" id="btnSaveEndpoints" title="Sauvegarder" style="width:36px;height:36px;padding:0;flex-shrink:0;font-size:16px;">💾</button>
       </div>
     </div>
 
@@ -429,98 +422,62 @@ function openMeasureDetail(m){
   document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
 
-  // Remplie les sélecteurs avec les sites base_site.kmz
-  const siteNames=[...new Set(AppState.points.filter(p=>p.category==='bts').map(p=>p.name))].sort();
-  function fillSelect(selId, currentVal){
-    const sel=document.getElementById(selId);
-    sel.innerHTML='<option value="">— choisir un site —</option>';
-    siteNames.forEach(n=>{
-      const opt=document.createElement('option');
-      opt.value=n; opt.textContent=n;
-      if(n===currentVal) opt.selected=true;
-      sel.appendChild(opt);
-    });
+  // Datalist unique : nœuds du graphe + sites KMZ
+  const {graph: gPreview} = buildGraph();
+  const graphNodes = Object.keys(gPreview).sort();
+  const siteNames = [...new Set(AppState.points.filter(p=>p.category==="bts").map(p=>p.name))].sort();
+  const allEndpoints = [...new Set([...graphNodes, ...siteNames])].sort();
+  const dl = document.getElementById("endpointList");
+  allEndpoints.forEach(n=>{ const o=document.createElement("option"); o.value=n; dl.appendChild(o); });
+
+  function bestMatch(term){
+    if(!term) return "";
+    const t = norm(term);
+    return allEndpoints.find(n=>norm(n)===t)
+      || allEndpoints.find(n=>norm(n).includes(t)||t.includes(norm(n)))
+      || term;
   }
 
-  // Trouve la meilleure correspondance site pour un terme PDF (pré-sélection)
-  function bestSiteMatch(term){
-    if(!term) return '';
-    const t=norm(term);
-    return siteNames.find(n=>norm(n)===t)
-      || siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))
-      || '';
-  }
+  document.getElementById("inpOrigine").value   = m.manualOrigine   || bestMatch(m.origine);
+  document.getElementById("inpExtremite").value = m.manualExtremite || bestMatch(m.extremite);
 
-  const initA = m.manualOrigine || bestSiteMatch(m.origine);
-  const initB = m.manualExtremite || bestSiteMatch(m.extremite);
-  fillSelect('selOrigine', initA);
-  fillSelect('selExtremite', initB);
-
-  // Feedback GPS : nœud le plus proche du site sélectionné
-  function showFeedback(feedbackId, siteName){
-    const el=document.getElementById(feedbackId);
-    if(!siteName){ el.textContent=''; return; }
-    const site=AppState.points.find(p=>p.name===siteName);
-    if(!site){ el.textContent=''; return; }
-    const {graph, nodeCoords}=buildGraph();
-    const candidates=findNodeViaSite(graph, nodeCoords, siteName);
-    if(candidates.length){
-      const c=candidates[0];
-      el.innerHTML=`<span style="color:var(--fiber)">✓ Nœud trouvé : <b>${c.node}</b> (${c.dist} m)</span>`;
-    } else {
-      el.innerHTML=`<span style="color:var(--fault)">⚠ Aucun nœud de tracé à proximité (KML chargé ?)</span>`;
-    }
-  }
-
-  // Feedback immédiat à la sélection
-  document.getElementById('selOrigine').addEventListener('change', e=>showFeedback('feedbackA', e.target.value));
-  document.getElementById('selExtremite').addEventListener('change', e=>showFeedback('feedbackB', e.target.value));
-
-  // Afficher feedback initial si déjà pré-sélectionné
-  if(initA) showFeedback('feedbackA', initA);
-  if(initB) showFeedback('feedbackB', initB);
-
-  // Sauvegarde
-  document.getElementById('btnSaveEndpoints').addEventListener('click', async ()=>{
-    const a=document.getElementById('selOrigine').value;
-    const b=document.getElementById('selExtremite').value;
-    const recs=await dbGetAll();
-    const rec=recs.find(r=>r.id===m.recId);
+  document.getElementById("btnSaveEndpoints").addEventListener("click", async ()=>{
+    const a = document.getElementById("inpOrigine").value.trim();
+    const b = document.getElementById("inpExtremite").value.trim();
+    const recs = await dbGetAll();
+    const rec  = recs.find(r=>r.id===m.recId);
     if(rec){
-      rec.manualOrigine=a||null;
-      rec.manualExtremite=b||null;
+      rec.manualOrigine   = a||null;
+      rec.manualExtremite = b||null;
       await dbUpdate(rec);
-      m.manualOrigine=a||null;
-      m.manualExtremite=b||null;
+      m.manualOrigine   = a||null;
+      m.manualExtremite = b||null;
       await loadAll();
-      toast('Extrémités sauvegardées');
+      toast("Extrémités sauvegardées");
     }
   });
 
-  // Corrélation + affichage automatique sur la carte
-  const cached=AppState.correlations[m.recId];
+  const cached = AppState.correlations[m.recId];
   if(cached) renderCorrelationResult(cached, m);
 
-  document.getElementById('btnCorrelate').addEventListener('click',()=>{
-    const a=document.getElementById('selOrigine').value;
-    const b=document.getElementById('selExtremite').value;
-    if(!a||!b){ toast('Sélectionne les deux sites'); return; }
-    const mEff={...m, manualOrigine:a, manualExtremite:b};
-    const result=correlate(mEff);
-    AppState.correlations[m.recId]=result;
-    AppState.activeCorrelation={result, measure:mEff};
+  document.getElementById("btnCorrelate").addEventListener("click", ()=>{
+    const a = document.getElementById("inpOrigine").value.trim();
+    const b = document.getElementById("inpExtremite").value.trim();
+    if(!a||!b){ toast("Renseigne les deux extrémités"); return; }
+    const mEff = {...m, manualOrigine:a, manualExtremite:b};
+    const result = correlate(mEff);
+    AppState.correlations[m.recId] = result;
+    AppState.activeCorrelation = {result, measure:mEff};
     renderCorrelationResult(result, mEff);
-    // Projection automatique sur la carte si succès
     if(!result.error){
       setTimeout(()=>{
-        document.getElementById('detailOverlay').classList.remove('active');
-        switchView('carte');
+        document.getElementById("detailOverlay").classList.remove("active");
+        switchView("carte");
         drawCorrelationLayer();
-      }, 400);
+      }, 300);
     }
   });
 }
-
 /* ---------------- CORRELATION ---------------- */
 
 // Pour une coordonnée GPS [lat,lon], trouve le site le plus proche dans base_site.kmz
@@ -640,6 +597,9 @@ function correlate(measure){
     const nodes=Object.keys(graph).slice(0,8).join(', ');
     return {error:`Extrémités introuvables.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nAucun nœud de tracé ni site (base_site.kmz) correspondant à proximité.\nExemples de nœuds disponibles : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus (nom d'un site ou d'un point du tracé).`};
   }
+
+  // Dijkstra toujours depuis startCands (origine) vers endCands (extrémité)
+  // → les événements seront placés à partir du point d'origine (distance 0 = origine)
   let best=null;
   startCands.forEach(s=>endCands.forEach(e=>{
     if(s.node===e.node) return;
@@ -652,14 +612,16 @@ function correlate(measure){
   }));
   if(!best) return {error:'Aucun chemin continu trouvé entre les deux extrémités dans le tracé chargé.'};
 
-  // placement des événements le long du chemin
+  // Placement des événements depuis l'origine (acc=0 au premier nœud du chemin = origine)
   const placed=(measure.events||[]).map(ev=>{
     let acc=0, pos=null, secName=null;
     for(const step of best.path){
       const sec=AppState.sections.find(s=>s.id===step.sectionId);
-      if(!sec){ continue; }
+      if(!sec) continue;
       const isLast = step===best.path[best.path.length-1];
       if(ev.distance<=acc+sec.length+0.001 || isLast){
+        // Sens de traversée : step.from est le nœud d'où on vient
+        // Si step.from=endA → coords dans l'ordre ; si step.from=endB → inverser
         let coords=sec.coords;
         if(step.from===sec.endB) coords=[...coords].reverse();
         const within=Math.min(sec.length, Math.max(0, ev.distance-acc));
