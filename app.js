@@ -567,148 +567,31 @@ function correlate(measure){
   const extremiteEff = measure.manualExtremite || measure.extremite;
 
   // 1) correspondance directe avec un nœud du graphe (extrémité de section)
-/* ---------------- CORRELATION ---------------- */
-function buildGraph(){
-  const graph={}, nodeCoords={};
-  AppState.sections.forEach(s=>{
-    if(!s.endA||!s.endB) return;
-    (graph[s.endA]=graph[s.endA]||[]).push({to:s.endB, w:s.length, sectionId:s.id});
-    (graph[s.endB]=graph[s.endB]||[]).push({to:s.endA, w:s.length, sectionId:s.id});
-    if(!nodeCoords[s.endA]) nodeCoords[s.endA]=s.coords[0];
-    if(!nodeCoords[s.endB]) nodeCoords[s.endB]=s.coords[s.coords.length-1];
-  });
-  return {graph, nodeCoords};
-}
+  let startCands=findNodeCandidates(graph, origineEff).map(n=>({node:n}));
+  let endCands=findNodeCandidates(graph, extremiteEff).map(n=>({node:n}));
 
-function norm(t){ return (t||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+  // 2) sinon, le terme désigne probablement un SITE (base_site.kmz) -> on cherche
+  //    le nœud de tracé géographiquement le plus proche de ce site
+  if(!startCands.length) startCands=findNodeViaSite(graph, nodeCoords, origineEff);
+  if(!endCands.length) endCands=findNodeViaSite(graph, nodeCoords, extremiteEff);
 
-function findNodeCandidates(graph, term){
-  if(!term) return [];
-  const t=norm(term);
-  return Object.keys(graph)
-    .filter(n=>norm(n).includes(t) || t.includes(norm(n)))
-    .map(n => ({ node: n, dist: 0, site: null }));
-}
-
-// Recherche géographiquement la fibre la plus proche à partir des coordonnées d'un site
-function findNodeViaSite(graph, nodeCoords, term, maxDistM=3000){
-  if(!term) return [];
-  const t=norm(term);
-  
-  // 1. Identification du site dans la base site (AppState.points)
-  const matchingSites=AppState.points.filter(p=>{
-    const pn=norm(p.name);
-    return pn.includes(t) || t.includes(pn);
-  });
-  if(!matchingSites.length) return [];
-  
-  const nodeNames=Object.keys(nodeCoords);
-  if(!nodeNames.length) return [];
-  const results=[];
-  
-  // 2. Pour chaque site correspondant, trouver la coordonnée de fibre la plus proche
-  matchingSites.forEach(site=>{
-    let best=null;
-    nodeNames.forEach(n=>{
-      const c=nodeCoords[n];
-      const d=haversine(site.lat, site.lon, c[0], c[1]);
-      if(!best || d<best.dist) best={node:n, dist:d, site};
-    });
-    if(best && best.dist<=maxDistM) results.push(best);
-  });
-  
-  results.sort((a,b)=>a.dist-b.dist);
-  return results;
-}
-
-// Algorithme de Dijkstra optimisé (Single-Source All-Destinations)
-function dijkstraAll(graph, start) {
-  const dist = {}, prev = {};
-  Object.keys(graph).forEach(n => dist[n] = Infinity);
-  dist[start] = 0;
-  const pq = new Set(Object.keys(graph));
-  
-  while (pq.size) {
-    let u = null;
-    pq.forEach(n => { if (u === null || dist[n] < dist[u]) u = n; });
-    if (u === null || dist[u] === Infinity) break;
-    pq.delete(u);
-    
-    (graph[u] || []).forEach(e => {
-      const alt = dist[u] + e.w;
-      if (alt < dist[e.to]) { 
-        dist[e.to] = alt; 
-        prev[e.to] = { node: u, sectionId: e.sectionId }; 
-      }
-    });
-  }
-  return { dist, prev };
-}
-
-// Reconstitution du chemin à partir de l'arbre des prédécesseurs de Dijkstra
-function reconstructPath(prev, start, end) {
-  if (start === end) return [];
-  const path = []; 
-  let cur = end;
-  while (cur !== start) {
-    const p = prev[cur];
-    if (!p) return null;
-    path.unshift({from: p.node, to: cur, sectionId: p.sectionId});
-    cur = p.node;
-  }
-  return path;
-}
-
-function correlate(measure){
-  if(!AppState.sections.length) return {error:'Aucun fichier KML/KMZ de tracé chargé.'};
-  const {graph, nodeCoords}=buildGraph();
-  const origineEff = measure.manualOrigine || measure.origine;
-  const extremiteEff = measure.manualExtremite || measure.extremite;
-
-  // Stratégie combinée : Correspondance de nom directe + Recherche par base site (coordonnées géographiques)
-  let startCands = [...findNodeCandidates(graph, origineEff), ...findNodeViaSite(graph, nodeCoords, origineEff)];
-  let endCands = [...findNodeCandidates(graph, extremiteEff), ...findNodeViaSite(graph, nodeCoords, extremiteEff)];
-
-  // Élimination des doublons de nœuds candidats pour optimiser le calcul
-  const uniqueStarts = Array.from(new Set(startCands.map(c => c.node))).map(node => startCands.find(c => c.node === node));
-  const uniqueEnds = Array.from(new Set(endCands.map(c => c.node))).map(node => endCands.find(c => c.node === node));
-
-  if(!uniqueStarts.length || !uniqueEnds.length){
+  if(!startCands.length || !endCands.length){
     const nodes=Object.keys(graph).slice(0,8).join(', ');
-    return {error:`Extrémités introuvables.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nAucun nœud de tracé ni site de la base cartographique correspondant.\nExemples de nœuds du tracé : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus.`};
+    return {error:`Extrémités introuvables.\nOrigine cherchée: "${origineEff}" — Extrémité: "${extremiteEff}".\nAucun nœud de tracé ni site (base_site.kmz) correspondant à proximité.\nExemples de nœuds disponibles : ${nodes}…\n→ Saisis manuellement les extrémités A et B ci-dessus (nom d'un site ou d'un point du tracé).`};
   }
-  
   let best=null;
-  
-  // On exécute Dijkstra une seule fois par nœud de départ unique trouvé sur la fibre
-  uniqueStarts.forEach(s=>{
-    const searchTree = dijkstraAll(graph, s.node);
-    if (!searchTree) return;
-    
-    uniqueEnds.forEach(e=>{
-      if(s.node===e.node) return;
-      
-      const totalDist = searchTree.dist[e.node];
-      if (totalDist === undefined || totalDist === Infinity) return;
-      
-      // Pénalité proportionnelle à la distance de raccordement (snap) entre le site réel et la fibre
+  startCands.forEach(s=>endCands.forEach(e=>{
+    if(s.node===e.node) return;
+    const r=dijkstra(graph,s.node,e.node);
+    if(r){
       const snapPenalty=(s.dist||0)+(e.dist||0);
-      
-      // Score basé sur l'écart de longueur par rapport au reflet de fin de fibre du PDF OTDR
-      const score = (measure.finFibre ? Math.abs(totalDist-measure.finFibre) : totalDist) + snapPenalty;
-      
-      if(!best || score<best.score) {
-        const path = reconstructPath(searchTree.prev, s.node, e.node);
-        if (path) {
-          best={path, total:totalDist, start:s.node, end:e.node, startSnap:s, endSnap:e, score};
-        }
-      }
-    });
-  });
-  
+      const score = (measure.finFibre ? Math.abs(r.total-measure.finFibre) : r.total) + snapPenalty;
+      if(!best || score<best.score) best={...r, start:s.node, end:e.node, startSnap:s, endSnap:e, score};
+    }
+  }));
   if(!best) return {error:'Aucun chemin continu trouvé entre les deux extrémités dans le tracé chargé.'};
 
-  // Placement automatique des événements OTDR le long de la fibre trouvée
+  // placement des événements le long du chemin
   const placed=(measure.events||[]).map(ev=>{
     let acc=0, pos=null, secName=null;
     for(const step of best.path){
