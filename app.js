@@ -360,8 +360,23 @@ function renderMesures(){
 }
 
 function openMeasureDetail(m){
+  AppState.currentMeasure = m;
   const nAnom=(m.events||[]).filter(ev=>isAnomalyEvent(ev,m)).length;
-  let html=`
+
+  // Datalist sites construit directement dans le HTML
+  const siteNames=[...new Set(AppState.points.filter(p=>p.category==='bts').map(p=>p.name))].sort();
+  const datalistOpts=siteNames.map(n=>`<option value="${n}">`).join('');
+  function bestSite(term){
+    if(!term) return '';
+    const t=norm(term);
+    return siteNames.find(n=>norm(n)===t)
+      || siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))
+      || term;
+  }
+  const initA = m.manualOrigine   || bestSite(m.origine);
+  const initB = m.manualExtremite || bestSite(m.extremite);
+
+  const html=`
     <h1>${m.cable||m.name}</h1>
     <p class="sub" style="margin-bottom:10px;">${m.name}</p>
     <div class="kpi-grid">
@@ -390,24 +405,24 @@ function openMeasureDetail(m){
       </tr>`;
     }).join('')}
     </tbody></table></div>
-    <p class="sub" style="margin-top:6px;">Table extraite par position (x/y) depuis le PDF Viavi — colonnes : m / dB / dB / dB/km / m / dB.</p>
+    <p class="sub" style="margin-top:6px;">Table extraite par position (x/y) depuis le PDF Viavi.</p>
 
     <h2>Corrélation</h2>
     <div class="card" style="margin-bottom:8px;">
       <div style="display:flex;flex-direction:column;gap:8px;">
         <div>
           <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Origine</label>
-          <input id="inpOrigine" list="siteListCorr" autocomplete="off"
-            placeholder="${m.origine||'Nom du site origine'}"
+          <input id="inpOrigine" list="siteListCorr" autocomplete="off" value="${initA}"
+            placeholder="Nom du site origine"
             style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
         </div>
         <div>
           <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité</label>
-          <input id="inpExtremite" list="siteListCorr" autocomplete="off"
-            placeholder="${m.extremite||'Nom du site extrémité'}"
+          <input id="inpExtremite" list="siteListCorr" autocomplete="off" value="${initB}"
+            placeholder="Nom du site extrémité"
             style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
         </div>
-        <datalist id="siteListCorr"></datalist>
+        <datalist id="siteListCorr">${datalistOpts}</datalist>
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
         <button class="btn" id="btnCorrelate" style="flex:1;">📡 Appliquer et afficher</button>
@@ -420,59 +435,9 @@ function openMeasureDetail(m){
   document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
 
-  // Datalist sites depuis base_site.kmz (pas de liste déroulante, input libre)
-  const siteNames = [...new Set(AppState.points.filter(p=>p.category==='bts').map(p=>p.name))].sort();
-  const dl = document.getElementById('siteListCorr');
-  siteNames.forEach(n=>{ const o=document.createElement('option'); o.value=n; dl.appendChild(o); });
-
-  // Pré-remplissage : valeur sauvegardée > correspondance fuzzy dans les sites
-  function bestSite(term){
-    if(!term) return '';
-    const t=norm(term);
-    return siteNames.find(n=>norm(n)===t)
-      || siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))
-      || term;
-  }
-  document.getElementById('inpOrigine').value   = m.manualOrigine   || bestSite(m.origine);
-  document.getElementById('inpExtremite').value = m.manualExtremite || bestSite(m.extremite);
-
-  // Sauvegarde
-  document.getElementById('btnSaveEndpoints').addEventListener('click', async ()=>{
-    const a=document.getElementById('inpOrigine').value.trim();
-    const b=document.getElementById('inpExtremite').value.trim();
-    const recs=await dbGetAll();
-    const rec=recs.find(r=>r.id===m.recId);
-    if(rec){
-      rec.manualOrigine=a||null; rec.manualExtremite=b||null;
-      await dbUpdate(rec);
-      m.manualOrigine=a||null; m.manualExtremite=b||null;
-      await loadAll();
-      toast('Extrémités sauvegardées');
-    }
-  });
-
-  // Cache
+  // Afficher corrélation en cache si disponible
   const cached=AppState.correlations[m.recId];
   if(cached) renderCorrelationResult(cached, m);
-
-  // Appliquer : GPS-chaining depuis origine vers extrémité
-  document.getElementById('btnCorrelate').addEventListener('click', ()=>{
-    const a=document.getElementById('inpOrigine').value.trim();
-    const b=document.getElementById('inpExtremite').value.trim();
-    if(!a||!b){ toast('Renseigne les deux sites'); return; }
-    const mEff={...m, manualOrigine:a, manualExtremite:b};
-    const result=correlateGPS(mEff);
-    AppState.correlations[m.recId]=result;
-    AppState.activeCorrelation={result, measure:mEff};
-    renderCorrelationResult(result, mEff);
-    if(!result.error){
-      setTimeout(()=>{
-        document.getElementById('detailOverlay').classList.remove('active');
-        switchView('carte');
-        drawCorrelationLayer();
-      }, 300);
-    }
-  });
 }
 
 /* ================================================================
@@ -916,6 +881,46 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   document.getElementById('sectionSearch').addEventListener('input',e=>renderSections(e.target.value));
   document.getElementById('detailOverlay').addEventListener('click',e=>{
     if(e.target.id==='detailOverlay') e.target.classList.remove('active');
+  });
+
+  // Délégation : boutons dans le détail mesure (évite les problèmes de getElementById post-innerHTML)
+  document.getElementById('detailContent').addEventListener('click', async e=>{
+    const btn=e.target.closest('button');
+    if(!btn) return;
+    const m=AppState.currentMeasure;
+    if(!m) return;
+
+    if(btn.id==='btnCorrelate'){
+      const a=(document.getElementById('inpOrigine')||{}).value?.trim();
+      const b=(document.getElementById('inpExtremite')||{}).value?.trim();
+      if(!a||!b){ toast('Renseigne les deux sites'); return; }
+      const mEff={...m, manualOrigine:a, manualExtremite:b};
+      const result=correlateGPS(mEff);
+      AppState.correlations[m.recId]=result;
+      AppState.activeCorrelation={result, measure:mEff};
+      renderCorrelationResult(result, mEff);
+      if(!result.error){
+        setTimeout(()=>{
+          document.getElementById('detailOverlay').classList.remove('active');
+          switchView('carte');
+          drawCorrelationLayer();
+        }, 300);
+      }
+    }
+
+    if(btn.id==='btnSaveEndpoints'){
+      const a=(document.getElementById('inpOrigine')||{}).value?.trim();
+      const b=(document.getElementById('inpExtremite')||{}).value?.trim();
+      const recs=await dbGetAll();
+      const rec=recs.find(r=>r.id===m.recId);
+      if(rec){
+        rec.manualOrigine=a||null; rec.manualExtremite=b||null;
+        await dbUpdate(rec);
+        AppState.currentMeasure={...m, manualOrigine:a||null, manualExtremite:b||null};
+        await loadAll();
+        toast('Extrémités sauvegardées');
+      }
+    }
   });
 
   document.getElementById('btnSearchSite').addEventListener('click', toggleMapSearch);
