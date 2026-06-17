@@ -360,227 +360,159 @@ function renderMesures(){
 }
 
 function openMeasureDetail(m){
-  AppState.currentMeasure = m;
+  AppState.currentMeasure=m;
   const nAnom=(m.events||[]).filter(ev=>isAnomalyEvent(ev,m)).length;
-
-  // Datalist sites construit directement dans le HTML
   const siteNames=[...new Set(AppState.points.filter(p=>p.category==='bts').map(p=>p.name))].sort();
-  const datalistOpts=siteNames.map(n=>`<option value="${n}">`).join('');
-  function bestSite(term){
+  const opts=siteNames.map(n=>`<option value="${n}">`).join('');
+  function best(term){
     if(!term) return '';
     const t=norm(term);
-    return siteNames.find(n=>norm(n)===t)
-      || siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))
-      || term;
+    return siteNames.find(n=>norm(n)===t)||siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))||term;
   }
-  const initA = m.manualOrigine   || bestSite(m.origine);
-  const initB = m.manualExtremite || bestSite(m.extremite);
-
-  const html=`
+  const vA=m.manualOrigine||best(m.origine)||'';
+  const vB=m.manualExtremite||best(m.extremite)||'';
+  document.getElementById('detailContent').innerHTML=`
     <h1>${m.cable||m.name}</h1>
-    <p class="sub" style="margin-bottom:10px;">${m.name}</p>
+    <p class="sub">${m.name}</p>
     <div class="kpi-grid">
       <div class="kpi"><div class="v">${m.fibre||'—'}</div><div class="l">Fibre</div></div>
       <div class="kpi"><div class="v">${fmtLen(m.finFibre)}</div><div class="l">Longueur</div></div>
-      <div class="kpi"><div class="v">${fmtNum(m.bilanTotal,3)}</div><div class="l">Bilan (dB)</div></div>
-      <div class="kpi"><div class="v">${fmtNum(m.orl,2)}</div><div class="l">ORL (dB)</div></div>
+      <div class="kpi"><div class="v">${fmtNum(m.bilanTotal,3)}</div><div class="l">Bilan dB</div></div>
+      <div class="kpi"><div class="v">${fmtNum(m.orl,2)}</div><div class="l">ORL dB</div></div>
     </div>
-    <div class="row" style="margin-top:6px;">
-      <span class="sub">${m.manualOrigine||m.origine||'?'} → ${m.manualExtremite||m.extremite||'?'}${m.manualOrigine?' <span style="font-size:9px;color:var(--fiber)">● manuel</span>':''}</span>
-      <span class="badge ${nAnom>0?'fault':'ok'}">${nAnom>0?nAnom+' évt(s) à vérifier':'Liaison OK'}</span>
-    </div>
-
     <h2>Événements OTDR</h2>
-    <div class="tablewrap"><table><thead><tr><th>Evt</th><th>Distance</th><th>Affaib.</th><th>Réflect.</th><th>Pente</th><th>Section</th><th>Bilan</th></tr></thead><tbody>
-    ${(m.events||[]).map(ev=>{
-      const anom=isAnomalyEvent(ev,m);
-      return `<tr class="event-row ${anom?'fault':''}">
-        <td>#${ev.num}</td>
-        <td>${fmtNum(ev.distance,2)} m</td>
-        <td>${ev.affaib!==null?fmtNum(ev.affaib,3):'—'}</td>
-        <td>${ev.reflect!==null?fmtNum(ev.reflect,2):'—'}</td>
-        <td>${ev.pente!==null?fmtNum(ev.pente,3):'—'}</td>
-        <td>${ev.section!==null?fmtLen(ev.section):'—'}</td>
-        <td>${ev.bilan!==null?fmtNum(ev.bilan,3):'—'}</td>
-      </tr>`;
-    }).join('')}
+    <div class="tablewrap"><table><thead><tr><th>#</th><th>Distance</th><th>Aff.</th><th>Réfl.</th><th>Pente</th><th>Bilan</th></tr></thead><tbody>
+    ${(m.events||[]).map(ev=>`<tr class="event-row ${isAnomalyEvent(ev,m)?'fault':''}">
+      <td>${ev.num}</td><td>${fmtNum(ev.distance,1)} m</td>
+      <td>${ev.affaib!=null?fmtNum(ev.affaib,3):'—'}</td>
+      <td>${ev.reflect!=null?fmtNum(ev.reflect,2):'—'}</td>
+      <td>${ev.pente!=null?fmtNum(ev.pente,3):'—'}</td>
+      <td>${ev.bilan!=null?fmtNum(ev.bilan,3):'—'}</td>
+    </tr>`).join('')}
     </tbody></table></div>
-    <p class="sub" style="margin-top:6px;">Table extraite par position (x/y) depuis le PDF Viavi.</p>
-
     <h2>Corrélation</h2>
-    <div class="card" style="margin-bottom:8px;">
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Origine</label>
-          <input id="inpOrigine" list="siteListCorr" autocomplete="off" value="${initA}"
-            placeholder="Nom du site origine"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
-        </div>
-        <div>
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;">Extrémité</label>
-          <input id="inpExtremite" list="siteListCorr" autocomplete="off" value="${initB}"
-            placeholder="Nom du site extrémité"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
-        </div>
-        <datalist id="siteListCorr">${datalistOpts}</datalist>
+    <div class="card">
+      <div style="margin-bottom:8px;">
+        <label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Origine</label>
+        <input id="inpOrigine" list="slCorr" value="${vA}" autocomplete="off"
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
       </div>
-      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
-        <button class="btn" id="btnCorrelate" style="flex:1;">📡 Appliquer et afficher</button>
-        <button class="btn secondary" id="btnSaveEndpoints" title="Sauvegarder"
-          style="width:36px;height:36px;padding:0;flex-shrink:0;font-size:16px;">💾</button>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Extrémité</label>
+        <input id="inpExtremite" list="slCorr" value="${vB}" autocomplete="off"
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;margin-top:4px;">
+      </div>
+      <datalist id="slCorr">${opts}</datalist>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn" style="flex:1;" onclick="applyCorrelation()">📡 Appliquer</button>
+        <button class="btn secondary" style="width:36px;height:36px;padding:0;font-size:16px;" onclick="saveEndpoints()">💾</button>
       </div>
     </div>
     <div id="corrResult"></div>
   `;
-  document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
-
-  // Afficher corrélation en cache si disponible
   const cached=AppState.correlations[m.recId];
-  if(cached) renderCorrelationResult(cached, m);
+  if(cached) renderCorrelationResult(cached,m);
 }
 
 /* ================================================================
-   CORRÉLATION PAR GPS (sans graphe de sections)
-   Principe :
-     1. Résoudre origine et extrémité → GPS via base_site.kmz
-     2. Chaîner les sections KML par proximité GPS (greedy)
-        depuis l'origine vers l'extrémité
-     3. Placer les événements OTDR le long de cette chaîne
+   CORRÉLATION LINÉAIRE : Origine GPS → Extrémité GPS
+   Les événements sont placés par interpolation linéaire proportionnelle
+   à leur distance / longueur totale de la fibre.
    ================================================================ */
 
 function siteGPS(name){
-  // Cherche d'abord un match exact, puis fuzzy
+  if(!name) return null;
   const t=norm(name);
-  const site = AppState.points.find(p=>p.category==='bts' && norm(p.name)===t)
-            || AppState.points.find(p=>p.category==='bts' && (norm(p.name).includes(t)||t.includes(norm(p.name))));
-  return site ? [site.lat, site.lon] : null;
+  return (AppState.points.find(p=>p.category==='bts'&&norm(p.name)===t)
+      ||AppState.points.find(p=>p.category==='bts'&&(norm(p.name).includes(t)||t.includes(norm(p.name)))))
+    ?.pos_tuple??null;
+}
+// helper: site -> [lat,lon]
+function sitePair(name){
+  if(!name) return null;
+  const t=norm(name);
+  const s=AppState.points.find(p=>p.category==='bts'&&norm(p.name)===t)
+       ||AppState.points.find(p=>p.category==='bts'&&(norm(p.name).includes(t)||t.includes(norm(p.name))));
+  return s?[s.lat,s.lon]:null;
 }
 
-function buildPathByGPS(originCoord, destCoord, maxGapM=500){
-  if(!AppState.sections.length) return null;
-
-  // Chaque section a un endpoint A (coords[0]) et B (coords[last])
-  const secs = AppState.sections.map(s=>({
-    s, A:s.coords[0], B:s.coords[s.coords.length-1]
-  }));
-
-  // Trouver la section de départ : endpoint le plus proche de l'origine
-  let bestD=Infinity, startSec=null, startReversed=false;
-  secs.forEach(({s,A,B})=>{
-    const dA=haversine(originCoord[0],originCoord[1],A[0],A[1]);
-    const dB=haversine(originCoord[0],originCoord[1],B[0],B[1]);
-    if(dA<bestD){ bestD=dA; startSec=s; startReversed=false; }
-    if(dB<bestD){ bestD=dB; startSec=s; startReversed=true; }
+function correlateLinear(measure){
+  const oName=measure.manualOrigine||measure.origine;
+  const dName=measure.manualExtremite||measure.extremite;
+  const oGPS=sitePair(oName);
+  const dGPS=sitePair(dName);
+  if(!oGPS) return {error:`Site introuvable : "${oName}"\n→ Charge base_site.kmz et vérifie le nom.`};
+  if(!dGPS) return {error:`Site introuvable : "${dName}"\n→ Charge base_site.kmz et vérifie le nom.`};
+  const total=measure.finFibre||haversine(oGPS[0],oGPS[1],dGPS[0],dGPS[1]);
+  const events=(measure.events||[]).map(ev=>{
+    const r=total>0?Math.min(1,Math.max(0,ev.distance/total)):0;
+    return {...ev, pos:[oGPS[0]+(dGPS[0]-oGPS[0])*r, oGPS[1]+(dGPS[1]-oGPS[1])*r]};
   });
-  if(!startSec) return null;
+  return {originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,events};
+}
 
-  const used=new Set();
-  const chain=[];
-  let cur=startSec;
-  let rev=startReversed;
-
-  while(cur){
-    used.add(cur.id);
-    chain.push({section:cur, reversed:rev});
-    // currentTip = endpoint en sortie de cette section
-    const tip = rev ? cur.coords[0] : cur.coords[cur.coords.length-1];
-
-    // Arrivé à destination ?
-    if(haversine(tip[0],tip[1],destCoord[0],destCoord[1]) < maxGapM) break;
-    // Limite anti-boucle
-    if(chain.length > AppState.sections.length) break;
-
-    // Prochain tronçon : section non visitée dont un endpoint est le plus proche du tip
-    let nextSec=null, nextRev=false, nextD=Infinity;
-    secs.forEach(({s,A,B})=>{
-      if(used.has(s.id)) return;
-      const dA=haversine(tip[0],tip[1],A[0],A[1]);
-      const dB=haversine(tip[0],tip[1],B[0],B[1]);
-      if(dA<nextD){ nextD=dA; nextSec=s; nextRev=false; }
-      if(dB<nextD){ nextD=dB; nextSec=s; nextRev=true; }
-    });
-    // Arrêt si trop loin (trou dans le tracé)
-    if(!nextSec || nextD>maxGapM) break;
-    cur=nextSec; rev=nextRev;
+function applyCorrelation(){
+  const m=AppState.currentMeasure;
+  if(!m){toast('Aucune mesure ouverte');return;}
+  const a=(document.getElementById('inpOrigine')||{value:''}).value.trim();
+  const b=(document.getElementById('inpExtremite')||{value:''}).value.trim();
+  if(!a||!b){toast('Renseigne les deux sites');return;}
+  const mEff={...m,manualOrigine:a,manualExtremite:b};
+  const result=correlateLinear(mEff);
+  AppState.correlations[m.recId]=result;
+  AppState.activeCorrelation={result,measure:mEff};
+  renderCorrelationResult(result,mEff);
+  if(!result.error){
+    setTimeout(()=>{
+      document.getElementById('detailOverlay').classList.remove('active');
+      switchView('carte');
+      drawCorrelationLayer();
+    },300);
   }
-  return chain.length ? chain : null;
 }
 
-function placeEventsOnChain(chain, events){
-  return (events||[]).map(ev=>{
-    let acc=0, pos=null, secName=null;
-    for(const {section,reversed} of chain){
-      const isLast = chain[chain.length-1].section===section;
-      if(ev.distance<=acc+section.length+0.001 || isLast){
-        const coords=reversed ? [...section.coords].reverse() : section.coords;
-        const within=Math.min(section.length, Math.max(0, ev.distance-acc));
-        pos=interpolateAlong(coords, within);
-        secName=section.name;
-        break;
-      }
-      acc+=section.length;
-    }
-    return {...ev, pos, sectionName:secName};
-  });
+async function saveEndpoints(){
+  const m=AppState.currentMeasure;
+  if(!m) return;
+  const a=(document.getElementById('inpOrigine')||{value:''}).value.trim();
+  const b=(document.getElementById('inpExtremite')||{value:''}).value.trim();
+  const recs=await dbGetAll();
+  const rec=recs.find(r=>r.id===m.recId);
+  if(rec){
+    rec.manualOrigine=a||null; rec.manualExtremite=b||null;
+    await dbUpdate(rec);
+    AppState.currentMeasure={...m,manualOrigine:a||null,manualExtremite:b||null};
+    await loadAll();
+    toast('Sauvegardé ✓');
+  }
 }
 
-function correlateGPS(measure){
-  if(!AppState.sections.length)
-    return {error:'Aucun fichier KML/KMZ de tracé chargé.'};
-
-  const origName = measure.manualOrigine || measure.origine;
-  const destName = measure.manualExtremite || measure.extremite;
-
-  const originCoord = siteGPS(origName);
-  const destCoord   = siteGPS(destName);
-
-  if(!originCoord)
-    return {error:`Site origine introuvable : "${origName}"\n→ Vérifie que base_site.kmz est chargé et que le nom correspond.`};
-  if(!destCoord)
-    return {error:`Site extrémité introuvable : "${destName}"\n→ Vérifie que base_site.kmz est chargé et que le nom correspond.`};
-
-  const chain=buildPathByGPS(originCoord, destCoord);
-  if(!chain)
-    return {error:'Impossible de construire un chemin depuis l\'origine vers l\'extrémité.\n→ Vérifie que le tracé KML couvre cette liaison.'};
-
-  const total=chain.reduce((s,{section})=>s+section.length, 0);
-  const placedEvents=placeEventsOnChain(chain, measure.events);
-
-  return {
-    chain,
-    total,
-    originName: origName,
-    destName:   destName,
-    originCoord, destCoord,
-    placedEvents
-  };
-}
-
-function renderCorrelationResult(result, measure){
+function renderCorrelationResult(result,measure){
   const div=document.getElementById('corrResult');
+  if(!div) return;
   if(result.error){
-    div.innerHTML=`<div class="card" style="border-color:var(--fault);white-space:pre-line;"><span class="sub" style="color:var(--fault);">${result.error}</span></div>`;
+    div.innerHTML=`<div class="card" style="border-color:var(--fault);white-space:pre-line;margin-top:8px;"><span class="sub" style="color:var(--fault);">${result.error}</span></div>`;
     return;
   }
-  const diff=measure.finFibre ? (result.total-measure.finFibre) : null;
   div.innerHTML=`
-    <div class="card">
-      <div class="row"><span class="sub">Tracé</span><span class="badge ok">${result.chain.length} section(s)</span></div>
+    <div class="card" style="margin-top:8px;">
       <div class="row"><span class="sub">${result.originName} → ${result.destName}</span></div>
-      <div class="row"><span class="sub">Longueur KML</span><strong>${fmtLen(result.total)}</strong></div>
-      ${diff!==null?`<div class="row"><span class="sub">Écart vs mesure</span><strong style="color:${Math.abs(diff)>50?'var(--fault)':'var(--fiber)'}">${diff>=0?'+':''}${fmtLen(diff)}</strong></div>`:''}
+      <div class="row"><span class="sub">Longueur</span><strong>${fmtLen(result.total)}</strong></div>
     </div>
-    <div class="tablewrap"><table><thead><tr><th>Evt</th><th>Distance</th><th>Position GPS</th><th></th></tr></thead><tbody>
-    ${result.placedEvents.map(ev=>{
+    <div class="tablewrap" style="margin-top:8px;"><table><thead><tr><th>#</th><th>Distance</th><th>Lat</th><th>Lon</th><th></th></tr></thead><tbody>
+    ${(result.events||[]).map(ev=>{
       const anom=isAnomalyEvent(ev,measure);
-      const coordTxt=ev.pos ? ev.pos[0].toFixed(6)+', '+ev.pos[1].toFixed(6) : '—';
-      const navBtn=ev.pos ? `<button class="btn small secondary" onclick="navigateTo(${ev.pos[0]},${ev.pos[1]})">🧭</button>` : '';
-      return `<tr class="event-row ${anom?'fault':''}"><td>#${ev.num}</td><td>${fmtNum(ev.distance,1)} m</td><td>${coordTxt}</td><td>${navBtn}</td></tr>`;
+      return `<tr class="event-row ${anom?'fault':''}">
+        <td>${ev.num}</td><td>${fmtNum(ev.distance,1)} m</td>
+        <td>${ev.pos?ev.pos[0].toFixed(5):'—'}</td>
+        <td>${ev.pos?ev.pos[1].toFixed(5):'—'}</td>
+        <td>${ev.pos?`<button class="btn small secondary" onclick="navigateTo(${ev.pos[0]},${ev.pos[1]})">🧭</button>`:''}</td>
+      </tr>`;
     }).join('')}
     </tbody></table></div>
   `;
-  AppState.activeCorrelation={result, measure};
+  AppState.activeCorrelation={result,measure};
 }
 
 function showCorrelationOnMap(){
@@ -595,6 +527,178 @@ function navigateTo(lat,lon){
 }
 
 /* ---------------- RENDER : SECTIONS ---------------- */
+function renderSections(filter){
+  const list=document.getElementById('sectionsList');
+  const kpis=document.getElementById('sectionsKpis');
+  if(!AppState.sections.length){
+    kpis.innerHTML='';
+    list.innerHTML='<div class="empty">Aucune section chargée. Importe un fichier KML/KMZ.</div>';
+    return;
+  }
+  const totalLen=AppState.sections.reduce((a,s)=>a+s.length,0);
+  kpis.innerHTML=`
+    <div class="kpi"><div class="v">${AppState.sections.length}</div><div class="l">Sections</div></div>
+    <div class="kpi"><div class="v">${fmtLen(totalLen)}</div><div class="l">Longueur totale</div></div>
+  `;
+  let secs=AppState.sections;
+  if(filter){
+    const f=filter.toUpperCase();
+    secs=secs.filter(s=>(s.endA||'').toUpperCase().includes(f) || (s.endB||'').toUpperCase().includes(f) || s.name.toUpperCase().includes(f));
+  }
+  if(!secs.length){
+    list.innerHTML='<div class="empty">Aucun résultat pour cette recherche.</div>';
+    return;
+  }
+  list.innerHTML=secs.slice(0,300).map(s=>`
+    <div class="card tap" data-id="${s.id}">
+      <div class="row"><strong style="font-size:12px;">${s.endA||'?'} ↔ ${s.endB||'?'}</strong><span class="badge kml">${fmtLen(s.length)}</span></div>
+      <div class="row"><span class="sub">${s.type||s.name}</span></div>
+    </div>`).join('') + (secs.length>300?`<p class="sub" style="text-align:center;margin-top:8px;">${secs.length-300} résultat(s) supplémentaire(s) — affine la recherche.</p>`:'');
+  list.querySelectorAll('.card').forEach(el=>{
+    el.addEventListener('click',()=>{
+      const sec=AppState.sections.find(s=>s.id===el.dataset.id);
+      openSectionDetail(sec);
+    });
+  });
+}
+function openSectionDetail(s){
+  document.getElementById('detailContent').innerHTML=`
+    <h1>${s.endA||'?'} ↔ ${s.endB||'?'}</h1>
+    <p class="sub">${s.name}</p>
+    <div class="kpi-grid" style="margin-top:10px;">
+      <div class="kpi"><div class="v">${fmtLen(s.length)}</div><div class="l">Longueur</div></div>
+      <div class="kpi"><div class="v">${s.coords.length}</div><div class="l">Points GPS</div></div>
+    </div>
+    <p class="sub" style="margin-top:10px;">Type : ${s.type||'—'}<br>Source : ${s.source}</p>
+    <button class="btn secondary" style="margin-top:12px;" onclick="focusSectionOnMap('${s.id}')">Voir sur la carte</button>
+  `;
+  document.getElementById('detailOverlay').classList.add('active');
+}
+function focusSectionOnMap(id){
+  document.getElementById('detailOverlay').classList.remove('active');
+  switchView('carte');
+  const s=AppState.sections.find(x=>x.id===id);
+  if(!s||!AppState.map) return;
+  const bounds=L.latLngBounds(s.coords);
+  AppState.map.fitBounds(bounds,{padding:[40,40]});
+  if(AppState._highlight) AppState.map.removeLayer(AppState._highlight);
+  AppState._highlight=L.polyline(s.coords,{color:'var(--fiber)'.replace('var(--fiber)','#39d98a'),weight:6,opacity:.9}).addTo(AppState.map);
+}
+
+/* ---------------- RENDER : HISTORIQUE ---------------- */
+function renderHistory(){
+  const list=document.getElementById('historyList');
+  if(!AppState.files.length){
+    list.innerHTML='<div class="empty">Aucun fichier dans l\'historique.</div>';
+    return;
+  }
+  const sorted=[...AppState.files].sort((a,b)=>b.date-a.date);
+  list.innerHTML=sorted.map(f=>{
+    const d=new Date(f.date);
+    const sizeKb=f.size?Math.round(f.size/1024)+' Ko':'';
+    let extra='';
+    if(f.ext==='pdf') extra=f.parsed?.cable||'';
+    else extra=`${(f.parsed.sections||[]).length} section(s), ${(f.parsed.points||[]).length} point(s)`;
+    return `<div class="card">
+      <div class="row">
+        <strong style="font-size:12px;">${f.name}</strong>
+        <span class="badge ${f.ext}">${f.ext}</span>
+      </div>
+      <div class="row"><span class="sub">${extra}</span><span class="sub">${sizeKb}</span></div>
+      <div class="row"><span class="sub">${d.toLocaleDateString('fr-FR')} ${d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span>
+        <button class="btn danger small" data-id="${f.id}">Supprimer</button></div>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('button.danger').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      await dbDelete(+btn.dataset.id);
+      await loadAll();
+      renderAll();
+      toast('Fichier supprimé');
+    });
+  });
+}
+
+/* ---------------- CARTE ---------------- */
+function initMap(){
+  if(AppState.map) return;
+  AppState.map=L.map('map',{preferCanvas:true}).setView([14.6,-15.2],8);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    maxZoom:19, attribution:'© OpenStreetMap'
+  }).addTo(AppState.map);
+  AppState.layers.sections=L.layerGroup().addTo(AppState.map);
+  AppState.layers.sites=L.layerGroup();
+  AppState.layers.joints=L.layerGroup();
+  AppState.layers.events=L.layerGroup().addTo(AppState.map);
+  AppState.layers.correlation=L.layerGroup().addTo(AppState.map);
+}
+function renderMap(){
+  AppState.siteMarkers={};
+  if(!AppState.map) return;
+  ['sections','sites','joints','events'].forEach(k=>AppState.layers[k].clearLayers());
+
+  AppState.sections.forEach(s=>{
+    L.polyline(s.coords,{color:'#4ad7ff',weight:3,opacity:.75})
+      .bindPopup(`<b>${s.endA||'?'} ↔ ${s.endB||'?'}</b><br>${fmtLen(s.length)}<br>${s.type||''}`)
+      .addTo(AppState.layers.sections);
+  });
+
+  AppState.points.forEach(p=>{
+    const navBtn=`<button class="btn small secondary" style="margin-top:6px;" onclick="navigateTo(${p.lat},${p.lon})">🧭 Itinéraire</button>`;
+    if(p.category==='bts'){
+      const marker=L.circleMarker([p.lat,p.lon],{radius:3,color:'#ffb454',fillColor:'#ffb454',fillOpacity:.8,weight:1})
+        .bindPopup(`<b>${p.name}</b><br>${navBtn}`)
+        .addTo(AppState.layers.sites);
+      AppState.siteMarkers[p.name]=marker;
+    } else if(p.category==='joint' || p.category==='chamber'){
+      L.circleMarker([p.lat,p.lon],{radius:4,color:'#c98bff',fillColor:'#c98bff',fillOpacity:.9,weight:1})
+        .bindPopup(`<b>${p.name}</b><br>${p.category==='joint'?'Joint':'Chambre'}<br>${navBtn}`)
+        .addTo(AppState.layers.joints);
+    }
+  });
+  updateSiteSearchList();
+
+  // Événements OTDR corrélés (toutes mesures)
+  Object.entries(AppState.correlations||{}).forEach(([recId, result])=>{
+    if(!result || result.error) return;
+    const measure=AppState.measures.find(m=>m.recId==recId);
+    (result.placedEvents||[]).forEach(ev=>{
+      if(!ev.pos) return;
+      const anom=measure?isAnomalyEvent(ev,measure):false;
+      L.circleMarker(ev.pos,{radius:7,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
+        .bindPopup(`<b>${measure?.cable||measure?.name||''}</b><br>Événement #${ev.num} — ${fmtNum(ev.distance,1)} m<br>${anom?'<span style="color:#ff5d5d">À vérifier</span><br>':''}<a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
+        .addTo(AppState.layers.events);
+    });
+  });
+}
+function drawCorrelationLayer(){
+  if(!AppState.map||!AppState.activeCorrelation) return;
+  AppState.layers.correlation.clearLayers();
+  AppState.layers.events.clearLayers();
+  if(!AppState.layers.correlation._map) AppState.layers.correlation.addTo(AppState.map);
+  if(!AppState.layers.events._map) AppState.layers.events.addTo(AppState.map);
+  const {result,measure}=AppState.activeCorrelation;
+  if(result.error) return;
+  const all=[];
+  if(result.originGPS&&result.destGPS){
+    L.polyline([result.originGPS,result.destGPS],{color:'#39d98a',weight:4,opacity:.7,dashArray:'8,6'})
+      .addTo(AppState.layers.correlation);
+    all.push(result.originGPS,result.destGPS);
+  }
+  if(result.originGPS) L.circleMarker(result.originGPS,{radius:9,color:'#4f9eff',fillColor:'#4f9eff',fillOpacity:1,weight:2}).bindPopup(`<b>Origine</b><br>${result.originName}`).addTo(AppState.layers.correlation);
+  if(result.destGPS)   L.circleMarker(result.destGPS,  {radius:9,color:'#ffb454',fillColor:'#ffb454',fillOpacity:1,weight:2}).bindPopup(`<b>Extrémité</b><br>${result.destName}`).addTo(AppState.layers.correlation);
+  (result.events||[]).forEach(ev=>{
+    if(!ev.pos) return;
+    const anom=isAnomalyEvent(ev,measure);
+    all.push(ev.pos);
+    L.circleMarker(ev.pos,{radius:anom?8:5,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
+      .bindPopup(`<b>#${ev.num}</b> — ${fmtNum(ev.distance,1)} m${anom?'<br><span style="color:#ff5d5d">⚠ Anomalie</span>':''}<br><button class="btn small secondary" onclick="navigateTo(${ev.pos[0]},${ev.pos[1]})">🧭 Itinéraire</button>`)
+      .addTo(AppState.layers.events);
+  });
+  if(all.length) AppState.map.fitBounds(L.latLngBounds(all),{padding:[40,40]});
+  toast('Événements affichés sur la carte');
+}
+
 function renderSections(filter){
   const list=document.getElementById('sectionsList');
   const kpis=document.getElementById('sectionsKpis');
@@ -883,46 +987,6 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     if(e.target.id==='detailOverlay') e.target.classList.remove('active');
   });
 
-  // Délégation : boutons dans le détail mesure (évite les problèmes de getElementById post-innerHTML)
-  document.getElementById('detailContent').addEventListener('click', async e=>{
-    const btn=e.target.closest('button');
-    if(!btn) return;
-    const m=AppState.currentMeasure;
-    if(!m) return;
-
-    if(btn.id==='btnCorrelate'){
-      const a=(document.getElementById('inpOrigine')||{}).value?.trim();
-      const b=(document.getElementById('inpExtremite')||{}).value?.trim();
-      if(!a||!b){ toast('Renseigne les deux sites'); return; }
-      const mEff={...m, manualOrigine:a, manualExtremite:b};
-      const result=correlateGPS(mEff);
-      AppState.correlations[m.recId]=result;
-      AppState.activeCorrelation={result, measure:mEff};
-      renderCorrelationResult(result, mEff);
-      if(!result.error){
-        setTimeout(()=>{
-          document.getElementById('detailOverlay').classList.remove('active');
-          switchView('carte');
-          drawCorrelationLayer();
-        }, 300);
-      }
-    }
-
-    if(btn.id==='btnSaveEndpoints'){
-      const a=(document.getElementById('inpOrigine')||{}).value?.trim();
-      const b=(document.getElementById('inpExtremite')||{}).value?.trim();
-      const recs=await dbGetAll();
-      const rec=recs.find(r=>r.id===m.recId);
-      if(rec){
-        rec.manualOrigine=a||null; rec.manualExtremite=b||null;
-        await dbUpdate(rec);
-        AppState.currentMeasure={...m, manualOrigine:a||null, manualExtremite:b||null};
-        await loadAll();
-        toast('Extrémités sauvegardées');
-      }
-    }
-  });
-
   document.getElementById('btnSearchSite').addEventListener('click', toggleMapSearch);
   document.getElementById('mapSearchClose').addEventListener('click', ()=>{
     document.getElementById('mapSearch').style.display='none';
@@ -969,3 +1033,5 @@ window.showCorrelationOnMap = showCorrelationOnMap;
 window.focusSectionOnMap = focusSectionOnMap;
 window.searchSite = searchSite;
 window.toggleMapSearch = toggleMapSearch;
+window.applyCorrelation = applyCorrelation;
+window.saveEndpoints = saveEndpoints;
