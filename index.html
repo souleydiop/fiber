@@ -103,6 +103,16 @@ tr.event-row.fault td{color:var(--fault);}
   display:flex;align-items:center;gap:6px;
 }
 .map-controls button.on{border-color:var(--signal);color:var(--signal);}
+.map-search{
+  position:absolute;top:10px;left:10px;right:104px;z-index:550;
+  display:flex;gap:6px;
+}
+.map-search input{
+  flex:1;min-width:0;background:var(--surface);border:1px solid var(--border);color:var(--text);
+  border-radius:8px;padding:9px 10px;font-size:13px;
+}
+.map-search input:focus{outline:1px solid var(--signal);}
+.map-search .btn.small{padding:9px 10px;}
 .map-legend{
   position:absolute;bottom:14px;left:10px;z-index:500;
   background:rgba(22,27,34,.92);border:1px solid var(--border);border-radius:8px;
@@ -200,7 +210,14 @@ a.linklike{color:var(--signal);text-decoration:none;}
   <!-- CARTE -->
   <section class="view" id="view-carte">
     <div id="map"></div>
+    <div class="map-search" id="mapSearch" style="display:none;">
+      <input type="text" id="mapSearchInput" list="mapSiteList" placeholder="Rechercher un site (KMZ Sites)…" autocomplete="off">
+      <datalist id="mapSiteList"></datalist>
+      <button id="mapSearchGo" class="btn small">🔍</button>
+      <button id="mapSearchClose" class="btn small secondary">✕</button>
+    </div>
     <div class="map-controls">
+      <button id="btnSearchSite">🔍 Site</button>
       <button id="layerSections" class="on">⎯ Sections</button>
       <button id="layerSites">● Sites</button>
       <button id="layerJoints">◆ Joints</button>
@@ -283,7 +300,7 @@ a.linklike{color:var(--signal);text-decoration:none;}
 <div class="toast" id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>
