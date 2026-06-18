@@ -370,7 +370,7 @@ function openMeasureDetail(m){
   }
   var vA=m.manualOrigine||best(m.origine)||'';
   var vB=m.manualExtremite||best(m.extremite)||'';
-  var opts=siteNames.map(function(n){return '<option value="'+n+'">';}).join('');
+  var opts=siteNames.map(function(n){return '<option value="'+n.replace(/&/g,'&amp;').replace(/"/g,'&quot;')+'">';}).join('');
   function badge(val){
     if(!val) return '';
     return siteNames.includes(val)
@@ -385,27 +385,33 @@ function openMeasureDetail(m){
       +' <button class="btn small secondary" style="padding:3px 8px;" onclick="'+fnName+'(\''+safe+'\')">&#8592; utiliser</button>'
       +'</div>';
   }
+  // Échappement HTML pour valeurs dynamiques
+  function esc(v){
+    if(v==null) return '&#8212;';
+    return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
   // Tableau événements
   var evRows='';
   (m.events||[]).forEach(function(ev){
     var cls=isAnomalyEvent(ev,m)?'fault':'';
     evRows+='<tr class="event-row '+cls+'">'
-      +'<td>'+ev.num+'</td>'
-      +'<td>'+fmtNum(ev.distance,1)+' m</td>'
-      +'<td>'+(ev.affaib!=null?fmtNum(ev.affaib,3):'&#8212;')+'</td>'
-      +'<td>'+(ev.reflect!=null?fmtNum(ev.reflect,2):'&#8212;')+'</td>'
-      +'<td>'+(ev.pente!=null?fmtNum(ev.pente,3):'&#8212;')+'</td>'
-      +'<td>'+(ev.bilan!=null?fmtNum(ev.bilan,3):'&#8212;')+'</td>'
+      +'<td>'+esc(ev.num)+'</td>'
+      +'<td>'+esc(fmtNum(ev.distance,1))+' m</td>'
+      +'<td>'+(ev.affaib!=null?esc(fmtNum(ev.affaib,3)):'&#8212;')+'</td>'
+      +'<td>'+(ev.reflect!=null?esc(fmtNum(ev.reflect,2)):'&#8212;')+'</td>'
+      +'<td>'+(ev.pente!=null?esc(fmtNum(ev.pente,3)):'&#8212;')+'</td>'
+      +'<td>'+(ev.bilan!=null?esc(fmtNum(ev.bilan,3)):'&#8212;')+'</td>'
       +'</tr>';
   });
   var html=''
-    +'<h1>'+(m.cable||m.name||'&#8212;')+'</h1>'
-    +'<p class="sub">'+(m.name||'')+'</p>'
+    +'<h1>'+esc(m.cable||m.name||'&#8212;')+'</h1>'
+    +'<p class="sub">'+esc(m.name||'')+'</p>'
     +'<div class="kpi-grid">'
-      +'<div class="kpi"><div class="v">'+(m.fibre||'&#8212;')+'</div><div class="l">Fibre</div></div>'
-      +'<div class="kpi"><div class="v">'+fmtLen(m.finFibre)+'</div><div class="l">Longueur</div></div>'
-      +'<div class="kpi"><div class="v">'+fmtNum(m.bilanTotal,3)+'</div><div class="l">Bilan dB</div></div>'
-      +'<div class="kpi"><div class="v">'+fmtNum(m.orl,2)+'</div><div class="l">ORL dB</div></div>'
+      +'<div class="kpi"><div class="v">'+esc(m.fibre||'&#8212;')+'</div><div class="l">Fibre</div></div>'
+      +'<div class="kpi"><div class="v">'+esc(fmtLen(m.finFibre))+'</div><div class="l">Longueur</div></div>'
+      +'<div class="kpi"><div class="v">'+esc(fmtNum(m.bilanTotal,3))+'</div><div class="l">Bilan dB</div></div>'
+      +'<div class="kpi"><div class="v">'+esc(fmtNum(m.orl,2))+'</div><div class="l">ORL dB</div></div>'
     +'</div>'
     +'<h2>&#201;v&#233;nements OTDR</h2>'
     +'<div class="tablewrap"><table><thead>'
@@ -420,7 +426,7 @@ function openMeasureDetail(m){
           +'<span id="stA">'+badge(vA)+'</span>'
         +'</div>'
         +chipPDF(m.origine,'setOrigine',vA)
-        +'<input id="inpOrigine" list="slCorr" value="'+vA+'" autocomplete="off" oninput="updSt(\'inpOrigine\',\'stA\')"'
+        +'<input id="inpOrigine" list="slCorr" value="'+esc(vA)+'" autocomplete="off" oninput="updSt(\'inpOrigine\',\'stA\')"'
         +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
       +'</div>'
       +'<div style="margin-bottom:12px;">'
@@ -429,7 +435,7 @@ function openMeasureDetail(m){
           +'<span id="stB">'+badge(vB)+'</span>'
         +'</div>'
         +chipPDF(m.extremite,'setExtremite',vB)
-        +'<input id="inpExtremite" list="slCorr" value="'+vB+'" autocomplete="off" oninput="updSt(\'inpExtremite\',\'stB\')"'
+        +'<input id="inpExtremite" list="slCorr" value="'+esc(vB)+'" autocomplete="off" oninput="updSt(\'inpExtremite\',\'stB\')"'
         +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
       +'</div>'
       +'<div style="display:flex;gap:8px;align-items:center;">'
