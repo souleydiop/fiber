@@ -568,44 +568,73 @@ function placeEventsOnChain(chain,events,totalFibre){
 }
 
 function correlateLinear(measure){
-  const oName=measure.manualOrigine||measure.origine;
-  const dName=measure.manualExtremite||measure.extremite;
-  const oGPS=sitePair(oName);
-  const dGPS=sitePair(dName);
-  if(!oGPS) return {error:`Site introuvable : "${oName}"\n→ Charge base_site.kmz et vérifie le nom.`};
-  if(!dGPS) return {error:`Site introuvable : "${dName}"\n→ Charge base_site.kmz et vérifie le nom.`};
+  try{
+    const oName=measure.manualOrigine||measure.origine;
+    const dName=measure.manualExtremite||measure.extremite;
+    const oGPS=sitePair(oName);
+    const dGPS=sitePair(dName);
+    if(!oGPS) return {error:`Site introuvable : "${oName}"\n→ Charge base_site.kmz et vérifie le nom.`};
+    if(!dGPS) return {error:`Site introuvable : "${dName}"\n→ Charge base_site.kmz et vérifie le nom.`};
 
-  const chain=buildPathByGPS(oGPS,dGPS);
-  if(chain){
-    const total=chain.reduce((s,{section})=>s+section.length,0);
-    const events=placeEventsOnChain(chain,measure.events,measure.finFibre||total);
-    return {chain,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,mode:'chain'};
+    let chain=null;
+    try{ chain=buildPathByGPS(oGPS,dGPS); }
+    catch(e){ console.error('buildPathByGPS a échoué, fallback linéaire:',e); chain=null; }
+
+    if(chain && chain.length){
+      const total=chain.reduce((s,{section})=>s+(section.length||0),0);
+      if(total>0 && isFinite(total)){
+        const events=placeEventsOnChain(chain,measure.events,measure.finFibre||total);
+        return {chain,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,mode:'chain'};
+      }
+    }
+    const total=measure.finFibre||haversine(oGPS[0],oGPS[1],dGPS[0],dGPS[1]);
+    const events=(measure.events||[]).map(ev=>{
+      const r=total>0?Math.min(1,Math.max(0,ev.distance/total)):0;
+      return {...ev,pos:[oGPS[0]+(dGPS[0]-oGPS[0])*r,oGPS[1]+(dGPS[1]-oGPS[1])*r]};
+    });
+    return {events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,mode:'linear'};
+  }catch(e){
+    console.error('correlateLinear a échoué:',e);
+    return {error:'Erreur de calcul : '+e.message};
   }
-  const total=measure.finFibre||haversine(oGPS[0],oGPS[1],dGPS[0],dGPS[1]);
-  const events=(measure.events||[]).map(ev=>{
-    const r=total>0?Math.min(1,Math.max(0,ev.distance/total)):0;
-    return {...ev,pos:[oGPS[0]+(dGPS[0]-oGPS[0])*r,oGPS[1]+(dGPS[1]-oGPS[1])*r]};
-  });
-  return {events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,mode:'linear'};
 }
 
 function applyCorrelation(){
-  const m=AppState.currentMeasure;
-  if(!m){toast('Aucune mesure ouverte');return;}
-  const a=(document.getElementById('inpOrigine')||{value:''}).value.trim();
-  const b=(document.getElementById('inpExtremite')||{value:''}).value.trim();
-  if(!a||!b){toast('Renseigne les deux sites');return;}
-  const mEff={...m,manualOrigine:a,manualExtremite:b};
-  const result=correlateLinear(mEff);
-  AppState.correlations[m.recId]=result;
-  AppState.activeCorrelation={result,measure:mEff};
-  renderCorrelationResult(result,mEff);
-  if(!result.error){
-    setTimeout(()=>{
-      document.getElementById('detailOverlay').classList.remove('active');
-      switchView('carte');
-      drawCorrelationLayer();
+  try{
+    const m=AppState.currentMeasure;
+    if(!m){toast('Aucune mesure ouverte');return;}
+    const inpA=document.getElementById('inpOrigine');
+    const inpB=document.getElementById('inpExtremite');
+    if(!inpA||!inpB){toast('Erreur : champs introuvables');console.error('inpOrigine/inpExtremite manquants dans le DOM');return;}
+    const a=inpA.value.trim();
+    const b=inpB.value.trim();
+    if(!a||!b){toast('Renseigne les deux sites');return;}
+
+    toast('Calcul en cours…');
+    const mEff={...m,manualOrigine:a,manualExtremite:b};
+    const result=correlateLinear(mEff);
+    AppState.correlations[m.recId]=result;
+    AppState.activeCorrelation={result,measure:mEff};
+    renderCorrelationResult(result,mEff);
+
+    if(result.error){
+      toast('Erreur : '+result.error.split('\n')[0]);
+      return;
+    }
+
+    setTimeout(function(){
+      try{
+        document.getElementById('detailOverlay').classList.remove('active');
+        switchView('carte');
+        drawCorrelationLayer();
+      }catch(e){
+        console.error('Erreur affichage carte:',e);
+        toast('Erreur affichage carte : '+e.message);
+      }
     },300);
+  }catch(e){
+    console.error('applyCorrelation a échoué:',e);
+    toast('Erreur : '+e.message);
   }
 }
 
@@ -839,8 +868,9 @@ function drawCorrelationLayer(){
 
   // Événements OTDR le long du tracé
   (result.events||[]).forEach(ev=>{
-    if(!ev.pos) return;
-    const anom=isAnomalyEvent(ev,measure);
+    if(!ev.pos||!isFinite(ev.pos[0])||!isFinite(ev.pos[1])) return;
+    let anom=false;
+    try{ anom=isAnomalyEvent(ev,measure); }catch(e){ console.error('isAnomalyEvent error',e); }
     all.push(ev.pos);
     const popup='<b>#'+ev.num+'</b> — '+fmtNum(ev.distance,1)+' m'
       +(anom?'<br><span style="color:#ff5d5d">⚠ Anomalie</span>':'')
