@@ -361,81 +361,86 @@ function renderMesures(){
 
 function openMeasureDetail(m){
   AppState.currentMeasure=m;
-  const siteNames=[...new Set(AppState.points.filter(p=>p.category==='bts').map(p=>p.name))].sort();
-  const opts=siteNames.map(n=>`<option value="${n}">`).join('');
+  var siteNames=[...new Set(AppState.points.filter(function(p){return p.category==='bts';}).map(function(p){return p.name;}))].sort();
   function best(term){
     if(!term) return '';
-    const t=norm(term);
-    return siteNames.find(n=>norm(n)===t)||siteNames.find(n=>norm(n).includes(t)||t.includes(norm(n)))||'';
+    var t=norm(term);
+    return siteNames.find(function(n){return norm(n)===t;})
+      ||siteNames.find(function(n){return norm(n).includes(t)||t.includes(norm(n));})||'';
   }
-  const vA=m.manualOrigine||best(m.origine)||'';
-  const vB=m.manualExtremite||best(m.extremite)||'';
+  var vA=m.manualOrigine||best(m.origine)||'';
+  var vB=m.manualExtremite||best(m.extremite)||'';
+  var opts=siteNames.map(function(n){return '<option value="'+n+'">';}).join('');
   function badge(val){
     if(!val) return '';
     return siteNames.includes(val)
-      ? '<span style="color:var(--fiber);font-size:10px;">✓ site trouvé</span>'
-      : '<span style="color:var(--fault);font-size:10px;">✗ non trouvé dans base_site</span>';
+      ?'<span style="color:var(--fiber);font-size:10px;">&#10003; site trouv&#233;</span>'
+      :'<span style="color:var(--fault);font-size:10px;">&#10007; non trouv&#233;</span>';
   }
-  function pdfChip(raw,fn){
-    if(!raw||raw===best(raw)) return '';
-    const safe=raw.replace(/'/g,"\\'").replace(/"/g,'&quot;');
-    return `<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">
-      📄 PDF : <b>${raw}</b>
-      <button class="btn small secondary" style="margin-left:6px;padding:3px 8px;" onclick="${fn}('${safe}')">← utiliser</button>
-    </div>`;
+  function chipPDF(raw,fnName,ref){
+    if(!raw||raw===ref) return '';
+    var safe=raw.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    return '<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">'
+      +'&#128196; PDF : <b>'+safe+'</b>'
+      +' <button class="btn small secondary" style="padding:3px 8px;" onclick="'+fnName+'(\''+safe+'\')">&#8592; utiliser</button>'
+      +'</div>';
   }
-  document.getElementById('detailContent').innerHTML=`
-    <h1>${m.cable||m.name}</h1>
-    <p class="sub">${m.name}</p>
-    <div class="kpi-grid">
-      <div class="kpi"><div class="v">${m.fibre||'—'}</div><div class="l">Fibre</div></div>
-      <div class="kpi"><div class="v">${fmtLen(m.finFibre)}</div><div class="l">Longueur</div></div>
-      <div class="kpi"><div class="v">${fmtNum(m.bilanTotal,3)}</div><div class="l">Bilan dB</div></div>
-      <div class="kpi"><div class="v">${fmtNum(m.orl,2)}</div><div class="l">ORL dB</div></div>
-    </div>
-    <h2>Événements OTDR</h2>
-    <div class="tablewrap"><table><thead>
-      <tr><th>#</th><th>Distance</th><th>Aff.</th><th>Réfl.</th><th>Pente</th><th>Bilan</th></tr>
-    </thead><tbody>
-    ${(m.events||[]).map(ev=>`<tr class="event-row ${isAnomalyEvent(ev,m)?'fault':''}">
-      <td>${ev.num}</td><td>${fmtNum(ev.distance,1)} m</td>
-      <td>${ev.affaib!=null?fmtNum(ev.affaib,3):'—'}</td>
-      <td>${ev.reflect!=null?fmtNum(ev.reflect,2):'—'}</td>
-      <td>${ev.pente!=null?fmtNum(ev.pente,3):'—'}</td>
-      <td>${ev.bilan!=null?fmtNum(ev.bilan,3):'—'}</td>
-    </tr>`).join('')}
-    </tbody></table></div>
-
-    <h2>Itinéraire</h2>
-    <datalist id="slCorr">${opts}</datalist>
-    <div class="card">
-      <div style="margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Origine</label>
-          <span id="stA">${badge(vA)}</span>
-        </div>
-        ${pdfChip(m.origine,'setOrigine')}
-        <input id="inpOrigine" list="slCorr" value="${vA}" autocomplete="off" oninput="updSt('inpOrigine','stA')"
-          style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">
-      </div>
-      <div style="margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-          <label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Extrémité</label>
-          <span id="stB">${badge(vB)}</span>
-        </div>
-        ${pdfChip(m.extremite,'setExtremite')}
-        <input id="inpExtremite" list="slCorr" value="${vB}" autocomplete="off" oninput="updSt('inpExtremite','stB')"
-          style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <button class="btn" style="flex:1;" onclick="applyCorrelation()">🗺️ Tracer l'itinéraire</button>
-        <button class="btn secondary" style="width:36px;height:36px;padding:0;font-size:16px;" title="Sauvegarder" onclick="saveEndpoints()">💾</button>
-      </div>
-    </div>
-    <div id="corrResult"></div>
-  `;
+  // Tableau événements
+  var evRows='';
+  (m.events||[]).forEach(function(ev){
+    var cls=isAnomalyEvent(ev,m)?'fault':'';
+    evRows+='<tr class="event-row '+cls+'">'
+      +'<td>'+ev.num+'</td>'
+      +'<td>'+fmtNum(ev.distance,1)+' m</td>'
+      +'<td>'+(ev.affaib!=null?fmtNum(ev.affaib,3):'&#8212;')+'</td>'
+      +'<td>'+(ev.reflect!=null?fmtNum(ev.reflect,2):'&#8212;')+'</td>'
+      +'<td>'+(ev.pente!=null?fmtNum(ev.pente,3):'&#8212;')+'</td>'
+      +'<td>'+(ev.bilan!=null?fmtNum(ev.bilan,3):'&#8212;')+'</td>'
+      +'</tr>';
+  });
+  var html=''
+    +'<h1>'+(m.cable||m.name||'&#8212;')+'</h1>'
+    +'<p class="sub">'+(m.name||'')+'</p>'
+    +'<div class="kpi-grid">'
+      +'<div class="kpi"><div class="v">'+(m.fibre||'&#8212;')+'</div><div class="l">Fibre</div></div>'
+      +'<div class="kpi"><div class="v">'+fmtLen(m.finFibre)+'</div><div class="l">Longueur</div></div>'
+      +'<div class="kpi"><div class="v">'+fmtNum(m.bilanTotal,3)+'</div><div class="l">Bilan dB</div></div>'
+      +'<div class="kpi"><div class="v">'+fmtNum(m.orl,2)+'</div><div class="l">ORL dB</div></div>'
+    +'</div>'
+    +'<h2>&#201;v&#233;nements OTDR</h2>'
+    +'<div class="tablewrap"><table><thead>'
+    +'<tr><th>#</th><th>Distance</th><th>Aff.</th><th>R&#233;fl.</th><th>Pente</th><th>Bilan</th></tr>'
+    +'</thead><tbody>'+evRows+'</tbody></table></div>'
+    +'<h2>Itin&#233;raire</h2>'
+    +'<datalist id="slCorr">'+opts+'</datalist>'
+    +'<div class="card">'
+      +'<div style="margin-bottom:10px;">'
+        +'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
+          +'<label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Origine</label>'
+          +'<span id="stA">'+badge(vA)+'</span>'
+        +'</div>'
+        +chipPDF(m.origine,'setOrigine',vA)
+        +'<input id="inpOrigine" list="slCorr" value="'+vA+'" autocomplete="off" oninput="updSt(\'inpOrigine\',\'stA\')"'
+        +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
+      +'</div>'
+      +'<div style="margin-bottom:12px;">'
+        +'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
+          +'<label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Extr&#233;mit&#233;</label>'
+          +'<span id="stB">'+badge(vB)+'</span>'
+        +'</div>'
+        +chipPDF(m.extremite,'setExtremite',vB)
+        +'<input id="inpExtremite" list="slCorr" value="'+vB+'" autocomplete="off" oninput="updSt(\'inpExtremite\',\'stB\')"'
+        +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
+      +'</div>'
+      +'<div style="display:flex;gap:8px;align-items:center;">'
+        +'<button class="btn" style="flex:1;" onclick="applyCorrelation()">&#128506; Tracer l\'itin&#233;raire</button>'
+        +'<button class="btn secondary" style="width:36px;height:36px;padding:0;font-size:16px;" onclick="saveEndpoints()">&#128190;</button>'
+      +'</div>'
+    +'</div>'
+    +'<div id="corrResult"></div>';
+  document.getElementById('detailContent').innerHTML=html;
   document.getElementById('detailOverlay').classList.add('active');
-  const cached=AppState.correlations[m.recId];
+  var cached=AppState.correlations[m.recId];
   if(cached) renderCorrelationResult(cached,m);
 }
 
