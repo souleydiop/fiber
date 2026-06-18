@@ -361,93 +361,137 @@ function renderMesures(){
 
 function openMeasureDetail(m){
   AppState.currentMeasure=m;
-  var siteNames=[...new Set(AppState.points.filter(function(p){return p.category==='bts';}).map(function(p){return p.name;}))].sort();
+
+  function esc(v){
+    if(v==null) return '&#8212;';
+    try{ return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    catch(e){ return '&#8212;'; }
+  }
+
+  var siteNames=[];
+  try{
+    siteNames=[...new Set(AppState.points.filter(function(p){return p.category==='bts';}).map(function(p){return p.name;}))].sort();
+  }catch(e){ console.error('siteNames error',e); }
+
   function best(term){
     if(!term) return '';
-    var t=norm(term);
-    return siteNames.find(function(n){return norm(n)===t;})
-      ||siteNames.find(function(n){return norm(n).includes(t)||t.includes(norm(n));})||'';
+    try{
+      var t=norm(term);
+      return siteNames.find(function(n){return norm(n)===t;})
+        ||siteNames.find(function(n){return norm(n).includes(t)||t.includes(norm(n));})||'';
+    }catch(e){ return ''; }
   }
   var vA=m.manualOrigine||best(m.origine)||'';
   var vB=m.manualExtremite||best(m.extremite)||'';
-  var opts=siteNames.map(function(n){return '<option value="'+n.replace(/&/g,'&amp;').replace(/"/g,'&quot;')+'">';}).join('');
+
   function badge(val){
     if(!val) return '';
-    return siteNames.includes(val)
+    return siteNames.indexOf(val)>=0
       ?'<span style="color:var(--fiber);font-size:10px;">&#10003; site trouv&#233;</span>'
       :'<span style="color:var(--fault);font-size:10px;">&#10007; non trouv&#233;</span>';
   }
   function chipPDF(raw,fnName,ref){
     if(!raw||raw===ref) return '';
-    var safe=raw.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    var safe=esc(raw).replace(/'/g,'&#39;');
     return '<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">'
       +'&#128196; PDF : <b>'+safe+'</b>'
       +' <button class="btn small secondary" style="padding:3px 8px;" onclick="'+fnName+'(\''+safe+'\')">&#8592; utiliser</button>'
       +'</div>';
   }
-  // Échappement HTML pour valeurs dynamiques
-  function esc(v){
-    if(v==null) return '&#8212;';
-    return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  var opts='';
+  try{
+    opts=siteNames.map(function(n){return '<option value="'+esc(n)+'">';}).join('');
+  }catch(e){ console.error('opts error',e); }
+
+  // --- BLOC 1 : ITINÉRAIRE — toujours construit et affiché en priorité ---
+  var itinHtml='';
+  try{
+    itinHtml=''
+      +'<h2>Itin&#233;raire</h2>'
+      +'<datalist id="slCorr">'+opts+'</datalist>'
+      +'<div class="card">'
+        +'<div style="margin-bottom:10px;">'
+          +'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
+            +'<label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Origine</label>'
+            +'<span id="stA">'+badge(vA)+'</span>'
+          +'</div>'
+          +chipPDF(m.origine,'setOrigine',vA)
+          +'<input id="inpOrigine" list="slCorr" value="'+esc(vA)+'" autocomplete="off" oninput="updSt(\'inpOrigine\',\'stA\')"'
+          +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
+        +'</div>'
+        +'<div style="margin-bottom:12px;">'
+          +'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
+            +'<label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Extr&#233;mit&#233;</label>'
+            +'<span id="stB">'+badge(vB)+'</span>'
+          +'</div>'
+          +chipPDF(m.extremite,'setExtremite',vB)
+          +'<input id="inpExtremite" list="slCorr" value="'+esc(vB)+'" autocomplete="off" oninput="updSt(\'inpExtremite\',\'stB\')"'
+          +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;align-items:center;">'
+          +'<button class="btn" style="flex:1;" onclick="applyCorrelation()">&#128506; Tracer l\'itin&#233;raire</button>'
+          +'<button class="btn secondary" style="width:36px;height:36px;padding:0;font-size:16px;" onclick="saveEndpoints()">&#128190;</button>'
+        +'</div>'
+      +'</div>'
+      +'<div id="corrResult"></div>';
+  }catch(e){
+    console.error('itinHtml error',e);
+    itinHtml='<h2>Itin&#233;raire</h2><div class="card"><p class="sub" style="color:var(--fault);">Erreur d\'affichage. Recharge la page.</p></div>';
   }
 
-  // Tableau événements
-  var evRows='';
-  (m.events||[]).forEach(function(ev){
-    var cls=isAnomalyEvent(ev,m)?'fault':'';
-    evRows+='<tr class="event-row '+cls+'">'
-      +'<td>'+esc(ev.num)+'</td>'
-      +'<td>'+esc(fmtNum(ev.distance,1))+' m</td>'
-      +'<td>'+(ev.affaib!=null?esc(fmtNum(ev.affaib,3)):'&#8212;')+'</td>'
-      +'<td>'+(ev.reflect!=null?esc(fmtNum(ev.reflect,2)):'&#8212;')+'</td>'
-      +'<td>'+(ev.pente!=null?esc(fmtNum(ev.pente,3)):'&#8212;')+'</td>'
-      +'<td>'+(ev.bilan!=null?esc(fmtNum(ev.bilan,3)):'&#8212;')+'</td>'
-      +'</tr>';
-  });
-  var html=''
-    +'<h1>'+esc(m.cable||m.name||'&#8212;')+'</h1>'
-    +'<p class="sub">'+esc(m.name||'')+'</p>'
-    +'<div class="kpi-grid">'
-      +'<div class="kpi"><div class="v">'+esc(m.fibre||'&#8212;')+'</div><div class="l">Fibre</div></div>'
-      +'<div class="kpi"><div class="v">'+esc(fmtLen(m.finFibre))+'</div><div class="l">Longueur</div></div>'
-      +'<div class="kpi"><div class="v">'+esc(fmtNum(m.bilanTotal,3))+'</div><div class="l">Bilan dB</div></div>'
-      +'<div class="kpi"><div class="v">'+esc(fmtNum(m.orl,2))+'</div><div class="l">ORL dB</div></div>'
-    +'</div>'
-    +'<h2>&#201;v&#233;nements OTDR</h2>'
-    +'<div class="tablewrap"><table><thead>'
-    +'<tr><th>#</th><th>Distance</th><th>Aff.</th><th>R&#233;fl.</th><th>Pente</th><th>Bilan</th></tr>'
-    +'</thead><tbody>'+evRows+'</tbody></table></div>'
-    +'<h2>Itin&#233;raire</h2>'
-    +'<datalist id="slCorr">'+opts+'</datalist>'
-    +'<div class="card">'
-      +'<div style="margin-bottom:10px;">'
-        +'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
-          +'<label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Origine</label>'
-          +'<span id="stA">'+badge(vA)+'</span>'
-        +'</div>'
-        +chipPDF(m.origine,'setOrigine',vA)
-        +'<input id="inpOrigine" list="slCorr" value="'+esc(vA)+'" autocomplete="off" oninput="updSt(\'inpOrigine\',\'stA\')"'
-        +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
-      +'</div>'
-      +'<div style="margin-bottom:12px;">'
-        +'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
-          +'<label style="font-size:11px;color:var(--muted);text-transform:uppercase;">Extr&#233;mit&#233;</label>'
-          +'<span id="stB">'+badge(vB)+'</span>'
-        +'</div>'
-        +chipPDF(m.extremite,'setExtremite',vB)
-        +'<input id="inpExtremite" list="slCorr" value="'+esc(vB)+'" autocomplete="off" oninput="updSt(\'inpExtremite\',\'stB\')"'
-        +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
-      +'</div>'
-      +'<div style="display:flex;gap:8px;align-items:center;">'
-        +'<button class="btn" style="flex:1;" onclick="applyCorrelation()">&#128506; Tracer l\'itin&#233;raire</button>'
-        +'<button class="btn secondary" style="width:36px;height:36px;padding:0;font-size:16px;" onclick="saveEndpoints()">&#128190;</button>'
-      +'</div>'
-    +'</div>'
-    +'<div id="corrResult"></div>';
-  document.getElementById('detailContent').innerHTML=html;
+  // --- BLOC 2 : HEADER + KPI ---
+  var headerHtml='';
+  try{
+    headerHtml=''
+      +'<h1>'+esc(m.cable||m.name||'&#8212;')+'</h1>'
+      +'<p class="sub">'+esc(m.name||'')+'</p>'
+      +'<div class="kpi-grid">'
+        +'<div class="kpi"><div class="v">'+esc(m.fibre||'&#8212;')+'</div><div class="l">Fibre</div></div>'
+        +'<div class="kpi"><div class="v">'+esc(fmtLen(m.finFibre))+'</div><div class="l">Longueur</div></div>'
+        +'<div class="kpi"><div class="v">'+esc(fmtNum(m.bilanTotal,3))+'</div><div class="l">Bilan dB</div></div>'
+        +'<div class="kpi"><div class="v">'+esc(fmtNum(m.orl,2))+'</div><div class="l">ORL dB</div></div>'
+      +'</div>';
+  }catch(e){
+    console.error('headerHtml error',e);
+    headerHtml='<h1>'+esc(m.name||'Mesure')+'</h1>';
+  }
+
+  // --- BLOC 3 : TABLEAU ÉVÉNEMENTS — le plus à risque, isolé en dernier ---
+  var eventsHtml='';
+  try{
+    var evRows='';
+    (m.events||[]).forEach(function(ev){
+      var anom=false;
+      try{ anom=isAnomalyEvent(ev,m); }catch(e2){}
+      var cls=anom?'fault':'';
+      evRows+='<tr class="event-row '+cls+'">'
+        +'<td>'+esc(ev.num)+'</td>'
+        +'<td>'+esc(fmtNum(ev.distance,1))+' m</td>'
+        +'<td>'+(ev.affaib!=null?esc(fmtNum(ev.affaib,3)):'&#8212;')+'</td>'
+        +'<td>'+(ev.reflect!=null?esc(fmtNum(ev.reflect,2)):'&#8212;')+'</td>'
+        +'<td>'+(ev.pente!=null?esc(fmtNum(ev.pente,3)):'&#8212;')+'</td>'
+        +'<td>'+(ev.bilan!=null?esc(fmtNum(ev.bilan,3)):'&#8212;')+'</td>'
+        +'</tr>';
+    });
+    eventsHtml=''
+      +'<h2>&#201;v&#233;nements OTDR</h2>'
+      +'<div class="tablewrap"><table><thead>'
+      +'<tr><th>#</th><th>Distance</th><th>Aff.</th><th>R&#233;fl.</th><th>Pente</th><th>Bilan</th></tr>'
+      +'</thead><tbody>'+evRows+'</tbody></table></div>';
+  }catch(e){
+    console.error('eventsHtml error',e);
+    eventsHtml='<h2>&#201;v&#233;nements OTDR</h2><p class="sub" style="color:var(--fault);">Erreur d\'affichage du tableau ('+esc(e.message)+').</p>';
+  }
+
+  // --- Assemblage final : header, tableau, puis itinéraire (toujours présent) ---
+  document.getElementById('detailContent').innerHTML = headerHtml + eventsHtml + itinHtml;
   document.getElementById('detailOverlay').classList.add('active');
-  var cached=AppState.correlations[m.recId];
-  if(cached) renderCorrelationResult(cached,m);
+
+  try{
+    var cached=AppState.correlations[m.recId];
+    if(cached) renderCorrelationResult(cached,m);
+  }catch(e){ console.error('renderCorrelationResult error',e); }
 }
 
 function setOrigine(v){ const e=document.getElementById('inpOrigine'); if(e){e.value=v;updSt('inpOrigine','stA');}}
