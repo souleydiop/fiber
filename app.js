@@ -568,7 +568,41 @@ function placeEventsOnChain(chain,events,totalFibre){
   });
 }
 
-function correlateLinear(measure){
+// Itinéraire routier (OSRM, service public gratuit, profil "driving")
+// Utilisé quand aucun tracé KML ne relie les deux sites : on calcule la route
+// réelle empruntée par une voiture entre l'origine et l'extrémité.
+async function fetchRoadRoute(oGPS,dGPS,timeoutMs=9000){
+  const url='https://router.project-osrm.org/route/v1/driving/'
+    +oGPS[1]+','+oGPS[0]+';'+dGPS[1]+','+dGPS[0]
+    +'?overview=full&geometries=geojson';
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
+  try{
+    const res=await fetch(url,{signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!res.ok) return null;
+    const data=await res.json();
+    if(data.code!=='Ok'||!data.routes||!data.routes.length) return null;
+    const route=data.routes[0];
+    // GeoJSON = [lon,lat] → on convertit en [lat,lon] pour Leaflet
+    const coords=route.geometry.coordinates.map(c=>[c[1],c[0]]);
+    return {coords, distance:route.distance};
+  }catch(e){
+    clearTimeout(timer);
+    console.error('fetchRoadRoute a échoué:',e);
+    return null;
+  }
+}
+
+function placeEventsOnRoute(routeCoords,events,routeDist,totalFibre){
+  const scale=totalFibre>0?routeDist/totalFibre:1;
+  return (events||[]).map(ev=>{
+    const d=Math.min(routeDist,Math.max(0,ev.distance*scale));
+    return {...ev,pos:interpolateAlong(routeCoords,d)};
+  });
+}
+
+async function correlateLinear(measure){
   try{
     const oName=measure.manualOrigine||measure.origine;
     const dName=measure.manualExtremite||measure.extremite;
@@ -577,9 +611,10 @@ function correlateLinear(measure){
     if(!oGPS) return {error:`Site introuvable : "${oName}"\n→ Charge base_site.kmz et vérifie le nom.`};
     if(!dGPS) return {error:`Site introuvable : "${dName}"\n→ Charge base_site.kmz et vérifie le nom.`};
 
+    // 1) Tracé fibre réel (sections KML chaînées par GPS)
     let chain=null;
     try{ chain=buildPathByGPS(oGPS,dGPS); }
-    catch(e){ console.error('buildPathByGPS a échoué, fallback linéaire:',e); chain=null; }
+    catch(e){ console.error('buildPathByGPS a échoué:',e); chain=null; }
 
     if(chain && chain.length){
       const total=chain.reduce((s,{section})=>s+(section.length||0),0);
@@ -588,6 +623,15 @@ function correlateLinear(measure){
         return {chain,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,mode:'chain'};
       }
     }
+
+    // 2) Pas de tracé KML : itinéraire routier (route empruntée en voiture)
+    const road=await fetchRoadRoute(oGPS,dGPS);
+    if(road && road.coords && road.coords.length>1 && road.distance>0){
+      const events=placeEventsOnRoute(road.coords,measure.events,road.distance,measure.finFibre||road.distance);
+      return {routeCoords:road.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:road.distance,mode:'road'};
+    }
+
+    // 3) Dernier repli : ligne droite (pas d'internet ou route introuvable)
     const total=measure.finFibre||haversine(oGPS[0],oGPS[1],dGPS[0],dGPS[1]);
     const events=(measure.events||[]).map(ev=>{
       const r=total>0?Math.min(1,Math.max(0,ev.distance/total)):0;
@@ -600,7 +644,7 @@ function correlateLinear(measure){
   }
 }
 
-function applyCorrelation(){
+async function applyCorrelation(){
   try{
     const m=AppState.currentMeasure;
     if(!m){toast('Aucune mesure ouverte');return;}
@@ -611,9 +655,9 @@ function applyCorrelation(){
     const b=inpB.value.trim();
     if(!a||!b){toast('Renseigne les deux sites');return;}
 
-    toast('Calcul en cours…');
+    toast('Calcul de l\'itinéraire…');
     const mEff={...m,manualOrigine:a,manualExtremite:b};
-    const result=correlateLinear(mEff);
+    const result=await correlateLinear(mEff);
     AppState.correlations[m.recId]=result;
     AppState.activeCorrelation={result,measure:mEff};
     renderCorrelationResult(result,mEff);
@@ -622,6 +666,8 @@ function applyCorrelation(){
       toast('Erreur : '+result.error.split('\n')[0]);
       return;
     }
+    if(result.mode==='road') toast('Itinéraire routier trouvé 🚗');
+    else if(result.mode==='linear') toast('Pas de route trouvée — ligne directe affichée');
 
     setTimeout(function(){
       try{
@@ -670,9 +716,14 @@ function renderCorrelationResult(result,measure){
     div.innerHTML=`<div class="card" style="border-color:var(--fault);white-space:pre-line;margin-top:8px;"><span class="sub" style="color:var(--fault);">${result.error}</span></div>`;
     return;
   }
+  function esc(v){ return v==null?'':String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  const modeLabel = result.mode==='chain' ? '🟢 Tracé fibre (KML)'
+    : result.mode==='road' ? '🔵 Itinéraire routier'
+    : '⚪ Ligne directe (approximation)';
   div.innerHTML=`
     <div class="card" style="margin-top:8px;">
-      <div class="row"><span class="sub">${result.originName} → ${result.destName}</span></div>
+      <div class="row"><span class="sub">${esc(result.originName)} → ${esc(result.destName)}</span></div>
+      <div class="row"><span class="sub">Mode</span><strong>${modeLabel}</strong></div>
       <div class="row"><span class="sub">Longueur</span><strong>${fmtLen(result.total)}</strong></div>
     </div>
     <div class="tablewrap" style="margin-top:8px;"><table><thead><tr><th>#</th><th>Distance</th><th>Lat</th><th>Lon</th><th></th></tr></thead><tbody>
@@ -859,13 +910,16 @@ function drawCorrelationLayer(){
   if(result.error) return;
   const all=[];
 
-  // Tracé fibre réel (GPS-chain) ou ligne droite (fallback linéaire)
+  // Tracé : fibre réelle (GPS-chain) > itinéraire routier (voiture) > ligne droite (dernier repli)
   if(result.chain&&result.chain.length){
     result.chain.forEach(({section,reversed})=>{
       const coords=reversed?[...section.coords].reverse():section.coords;
       L.polyline(coords,{color:'#39d98a',weight:5,opacity:.85}).addTo(AppState.layers.correlation);
       all.push(...coords);
     });
+  } else if(result.routeCoords&&result.routeCoords.length>1){
+    L.polyline(result.routeCoords,{color:'#4f9eff',weight:5,opacity:.85}).addTo(AppState.layers.correlation);
+    all.push(...result.routeCoords);
   } else if(result.originGPS&&result.destGPS){
     L.polyline([result.originGPS,result.destGPS],{color:'#39d98a',weight:4,opacity:.7,dashArray:'8,6'})
       .addTo(AppState.layers.correlation);
