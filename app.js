@@ -32,6 +32,7 @@ function toast(msg){
   t._timer=setTimeout(()=>t.classList.remove('show'),2200);
 }
 function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+function norm(t){ return (t||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
 function fmtNum(n,d=1){ return (n===null||n===undefined||isNaN(n))?'—':Number(n).toFixed(d); }
 function fmtLen(m){
   if(m===null||m===undefined||isNaN(m)) return '—';
