@@ -626,7 +626,15 @@ function applyCorrelation(){
       try{
         document.getElementById('detailOverlay').classList.remove('active');
         switchView('carte');
-        drawCorrelationLayer();
+        setTimeout(function(){
+          try{
+            if(AppState.map) AppState.map.invalidateSize();
+            drawCorrelationLayer();
+          }catch(e2){
+            console.error('Erreur affichage carte (2):',e2);
+            toast('Erreur affichage carte : '+e2.message);
+          }
+        },120);
       }catch(e){
         console.error('Erreur affichage carte:',e);
         toast('Erreur affichage carte : '+e.message);
@@ -838,7 +846,10 @@ function renderMap(){
   });
 }
 function drawCorrelationLayer(){
-  if(!AppState.map||!AppState.activeCorrelation) return;
+  if(!AppState.activeCorrelation) return;
+  if(!AppState.map){ initMap(); }
+  if(!AppState.map){ console.error('drawCorrelationLayer: carte non initialisée'); toast('Erreur : carte non prête'); return; }
+  if(!AppState.layers.correlation){ console.error('drawCorrelationLayer: layers non initialisés'); return; }
   AppState.layers.correlation.clearLayers();
   AppState.layers.events.clearLayers();
   if(!AppState.layers.correlation._map) AppState.layers.correlation.addTo(AppState.map);

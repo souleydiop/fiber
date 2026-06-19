@@ -1,4 +1,4 @@
-const CACHE_NAME='ospmanager-v7';
+const CACHE_NAME='ospmanager-v8';
 const ASSETS=[
   './',
   './index.html',
