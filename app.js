@@ -575,7 +575,7 @@ function placeEventsOnChain(chain,events){
 async function fetchRoadRoute(oGPS,dGPS,timeoutMs=9000){
   const url='https://router.project-osrm.org/route/v1/driving/'
     +oGPS[1]+','+oGPS[0]+';'+dGPS[1]+','+dGPS[0]
-    +'?overview=full&geometries=geojson';
+    +'?overview=full&geometries=geojson&exclude=toll';
   const ctrl=new AbortController();
   const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
   try{
@@ -595,20 +595,11 @@ async function fetchRoadRoute(oGPS,dGPS,timeoutMs=9000){
   }
 }
 
-// La route OSRM (voiture) n'a AUCUN rapport métrique avec la longueur réelle
-// de la fibre : c'est juste un tracé visuel approximatif entre les deux sites.
-// On place donc chaque événement proportionnellement à sa position dans le
-// câble (distance / longueur totale mesurée) le long de cette route.
-function placeEventsOnRoute(routeCoords,events,totalFibre){
-  const routeLen=(function(){
-    let d=0;
-    for(let i=1;i<routeCoords.length;i++) d+=haversine(routeCoords[i-1][0],routeCoords[i-1][1],routeCoords[i][0],routeCoords[i][1]);
-    return d;
-  })();
-  return (events||[]).map(ev=>{
-    const r=totalFibre>0?Math.min(1,Math.max(0,ev.distance/totalFibre)):0;
-    return {...ev,pos:interpolateAlong(routeCoords,r*routeLen)};
-  });
+// Itinéraire OSRM (voiture, sans péage) pris comme tracé global depuis l'origine.
+// Chaque événement est placé à SA distance mesurée (OTDR), brute, en marchant
+// le long de cet itinéraire — exactement comme pour un tracé KML.
+function placeEventsOnRoute(routeCoords,events){
+  return (events||[]).map(ev=>({...ev,pos:interpolateAlong(routeCoords,ev.distance)}));
 }
 
 async function correlateLinear(measure){
@@ -634,13 +625,12 @@ async function correlateLinear(measure){
       }
     }
 
-    // 2) Pas de tracé KML : itinéraire routier (route empruntée en voiture)
-    // Note : la distance routière n'a pas de lien avec la longueur de fibre,
-    // donc pas d'avertissement d'écart ici (placement proportionnel attendu).
+    // 2) Pas de tracé KML : itinéraire OSRM (voiture, péages exclus)
+    // Chaque événement est placé à sa distance mesurée brute, en marchant
+    // le long de cet itinéraire depuis l'origine.
     const road=await fetchRoadRoute(oGPS,dGPS);
     if(road && road.coords && road.coords.length>1 && road.distance>0){
-      const totalFibre=measure.finFibre||Math.max(0,...(measure.events||[]).map(e=>e.distance||0))||road.distance;
-      const events=placeEventsOnRoute(road.coords,measure.events,totalFibre);
+      const events=placeEventsOnRoute(road.coords,measure.events);
       return {routeCoords:road.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:road.distance,measureLen:measure.finFibre,mode:'road'};
     }
 
@@ -732,10 +722,10 @@ function renderCorrelationResult(result,measure){
   }
   function esc(v){ return v==null?'':String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   const modeLabel = result.mode==='chain' ? '🟢 Tracé fibre (KML)'
-    : result.mode==='road' ? '🔵 Itinéraire routier'
+    : result.mode==='road' ? '🔵 Itinéraire routier (sans péage)'
     : '⚪ Ligne directe (approximation)';
   const roadNote = result.mode==='road'
-    ? `<p class="sub" style="margin-top:4px;">La distance routière (voiture) ne correspond pas à la longueur de la fibre. Les événements sont placés proportionnellement le long de la route (% de la mesure OTDR), pas à leur distance exacte.</p>`
+    ? `<p class="sub" style="margin-top:4px;">Itinéraire calculé par OSRM (voiture, péages exclus). Chaque événement est placé à sa distance exacte mesurée (OTDR), en suivant cet itinéraire depuis l'origine.</p>`
     : '';
   const gapWarning = (result.mode==='chain' && result.gapPct!=null && result.gapPct>15)
     ? `<div class="row" style="color:var(--fault);"><span class="sub">⚠ Écart important</span><strong>${result.gapPct.toFixed(0)}%</strong></div>
