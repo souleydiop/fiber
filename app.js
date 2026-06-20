@@ -129,9 +129,10 @@ async function dbUpdate(rec){
 }
 
 /* ---------------- PARSERS ---------------- */
-
-// Extrait les données d'UNE page (un "content" pdf.js déjà récupéré).
-function parsePDFPage(content){
+async function parsePDF(arrayBuffer){
+  const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+  const page = await pdf.getPage(1);
+  const content = await page.getTextContent();
   const text = content.items.map(i=>i.str).join(' ').replace(/\s+/g,' ');
 
   const get=(re)=>{ const m=text.match(re); return m? m[1].trim() : null; };
@@ -199,26 +200,6 @@ function parsePDFPage(content){
   return {cable, fibre, origine, extremite, laser, bilanTotal, orl, finFibre, nbEvt, events, rawText:text};
 }
 
-// Parse TOUTES les pages d'un PDF. Cas fréquent : un PDF multi-pages où chaque
-// page est une fibre différente du MÊME câble (mêmes origine/extrémité), avec
-// son propre Bilan/Longueur/ORL/événements. Retourne un tableau de mesures.
-async function parsePDF(arrayBuffer){
-  const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
-  const pages=[];
-  for(let p=1;p<=pdf.numPages;p++){
-    try{
-      const page = await pdf.getPage(p);
-      const content = await page.getTextContent();
-      const parsed = parsePDFPage(content);
-      // Ignore les pages vides/non-OTDR (pas de câble ni de fibre détecté)
-      if(parsed.cable || parsed.fibre || parsed.events.length) pages.push(parsed);
-    }catch(e){
-      console.error('Erreur parsing page '+p+':',e);
-    }
-  }
-  return pages;
-}
-
 function parseKML(text, sourceName, sourceType){
   const doc = new DOMParser().parseFromString(text,'text/xml');
   const placemarks = doc.getElementsByTagName('Placemark');
@@ -278,25 +259,8 @@ async function handleFiles(fileList){
       if(ext==='pdf'){
         const buf=await file.arrayBuffer();
         const base64=arrayBufferToBase64(buf);
-        const pages=await parsePDF(buf); // tableau : 1 entrée par fibre/page
-        if(!pages.length){
-          toast('Aucune mesure détectée dans '+file.name);
-        } else {
-          // Clé de câble partagée : même PDF + même couple origine/extrémité
-          // → toutes les fibres de ce câble partageront la même corrélation.
-          const cableKey=file.name+'|'+(pages[0].origine||'')+'|'+(pages[0].extremite||'');
-          for(let p=0;p<pages.length;p++){
-            const parsed=pages[p];
-            // Nom distinct par fibre pour la liste Mesures
-            const label = parsed.fibre ? ('Fibre '+parsed.fibre) : ('page '+(p+1));
-            const name = pages.length>1 ? file.name+' — '+label : file.name;
-            await dbAdd({
-              name, ext, date:Date.now(), size:file.size, parsed,
-              dataBase64: p===0 ? base64 : undefined, // évite de dupliquer le PDF N fois
-              cableKey, pageIndex:p
-            });
-          }
-        }
+        const parsed=await parsePDF(buf);
+        await dbAdd({name:file.name, ext, date:Date.now(), size:file.size, parsed, dataBase64:base64});
       } else if(ext==='kml' || ext==='kmz'){
         let text;
         const sourceType = /site|bts/i.test(file.name) ? 'bts' : 'fiber';
@@ -338,7 +302,6 @@ async function loadAll(){
         recId:r.id, name:r.name, date:r.date,
         manualOrigine:r.manualOrigine||null,
         manualExtremite:r.manualExtremite||null,
-        cableKey:r.cableKey||null,
         ...r.parsed
       });
     } else if(r.ext==='kml' || r.ext==='kmz'){
@@ -741,27 +704,13 @@ async function saveEndpoints(){
   const b=(document.getElementById('inpExtremite')||{value:''}).value.trim();
   const recs=await dbGetAll();
   const rec=recs.find(r=>r.id===m.recId);
-  if(!rec) return;
-
-  rec.manualOrigine=a||null; rec.manualExtremite=b||null;
-  await dbUpdate(rec);
-
-  // Partage automatique : même câble (même PDF, même origine/extrémité d'origine)
-  // → toutes les autres fibres de ce câble reçoivent la même corrélation,
-  // évitant de ressaisir Origine/Extrémité pour chaque fibre.
-  let sharedCount=0;
-  if(m.cableKey){
-    const siblings=recs.filter(r=>r.id!==m.recId && r.cableKey===m.cableKey);
-    for(const sib of siblings){
-      sib.manualOrigine=a||null; sib.manualExtremite=b||null;
-      await dbUpdate(sib);
-      sharedCount++;
-    }
+  if(rec){
+    rec.manualOrigine=a||null; rec.manualExtremite=b||null;
+    await dbUpdate(rec);
+    AppState.currentMeasure={...m,manualOrigine:a||null,manualExtremite:b||null};
+    await loadAll();
+    toast('Sauvegardé ✓');
   }
-
-  AppState.currentMeasure={...m,manualOrigine:a||null,manualExtremite:b||null};
-  await loadAll();
-  toast(sharedCount>0 ? `Sauvegardé ✓ (partagé sur ${sharedCount} autre(s) fibre(s))` : 'Sauvegardé ✓');
 }
 
 function renderCorrelationResult(result,measure){
