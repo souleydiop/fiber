@@ -595,10 +595,20 @@ async function fetchRoadRoute(oGPS,dGPS,timeoutMs=9000){
   }
 }
 
-// Place chaque événement à SA distance mesurée (OTDR), brute, le long de la route.
-// interpolateAlong gère automatiquement le dépassement (renvoie le dernier point).
-function placeEventsOnRoute(routeCoords,events){
-  return (events||[]).map(ev=>({...ev,pos:interpolateAlong(routeCoords,ev.distance)}));
+// La route OSRM (voiture) n'a AUCUN rapport métrique avec la longueur réelle
+// de la fibre : c'est juste un tracé visuel approximatif entre les deux sites.
+// On place donc chaque événement proportionnellement à sa position dans le
+// câble (distance / longueur totale mesurée) le long de cette route.
+function placeEventsOnRoute(routeCoords,events,totalFibre){
+  const routeLen=(function(){
+    let d=0;
+    for(let i=1;i<routeCoords.length;i++) d+=haversine(routeCoords[i-1][0],routeCoords[i-1][1],routeCoords[i][0],routeCoords[i][1]);
+    return d;
+  })();
+  return (events||[]).map(ev=>{
+    const r=totalFibre>0?Math.min(1,Math.max(0,ev.distance/totalFibre)):0;
+    return {...ev,pos:interpolateAlong(routeCoords,r*routeLen)};
+  });
 }
 
 async function correlateLinear(measure){
@@ -625,11 +635,13 @@ async function correlateLinear(measure){
     }
 
     // 2) Pas de tracé KML : itinéraire routier (route empruntée en voiture)
+    // Note : la distance routière n'a pas de lien avec la longueur de fibre,
+    // donc pas d'avertissement d'écart ici (placement proportionnel attendu).
     const road=await fetchRoadRoute(oGPS,dGPS);
     if(road && road.coords && road.coords.length>1 && road.distance>0){
-      const events=placeEventsOnRoute(road.coords,measure.events);
-      const gapPct=measure.finFibre?Math.abs(road.distance-measure.finFibre)/measure.finFibre*100:null;
-      return {routeCoords:road.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:road.distance,measureLen:measure.finFibre,gapPct,mode:'road'};
+      const totalFibre=measure.finFibre||Math.max(0,...(measure.events||[]).map(e=>e.distance||0))||road.distance;
+      const events=placeEventsOnRoute(road.coords,measure.events,totalFibre);
+      return {routeCoords:road.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:road.distance,measureLen:measure.finFibre,mode:'road'};
     }
 
     // 3) Dernier repli : ligne droite (pas d'internet ou route introuvable)
@@ -722,7 +734,10 @@ function renderCorrelationResult(result,measure){
   const modeLabel = result.mode==='chain' ? '🟢 Tracé fibre (KML)'
     : result.mode==='road' ? '🔵 Itinéraire routier'
     : '⚪ Ligne directe (approximation)';
-  const gapWarning = (result.gapPct!=null && result.gapPct>15)
+  const roadNote = result.mode==='road'
+    ? `<p class="sub" style="margin-top:4px;">La distance routière (voiture) ne correspond pas à la longueur de la fibre. Les événements sont placés proportionnellement le long de la route (% de la mesure OTDR), pas à leur distance exacte.</p>`
+    : '';
+  const gapWarning = (result.mode==='chain' && result.gapPct!=null && result.gapPct>15)
     ? `<div class="row" style="color:var(--fault);"><span class="sub">⚠ Écart important</span><strong>${result.gapPct.toFixed(0)}%</strong></div>
        <p class="sub" style="color:var(--fault);margin-top:4px;">Le tracé trouvé (${fmtLen(result.total)}) diffère beaucoup de la longueur mesurée OTDR (${fmtLen(result.measureLen)}). Les événements proches de l'extrémité peuvent être mal placés — vérifie les noms de sites ou le tracé KML.</p>`
     : '';
@@ -732,6 +747,7 @@ function renderCorrelationResult(result,measure){
       <div class="row"><span class="sub">Mode</span><strong>${modeLabel}</strong></div>
       <div class="row"><span class="sub">Longueur tracé</span><strong>${fmtLen(result.total)}</strong></div>
       ${result.measureLen?`<div class="row"><span class="sub">Longueur mesurée (OTDR)</span><strong>${fmtLen(result.measureLen)}</strong></div>`:''}
+      ${roadNote}
       ${gapWarning}
     </div>
     <div class="tablewrap" style="margin-top:8px;"><table><thead><tr><th>#</th><th>Distance</th><th>Lat</th><th>Lon</th><th></th></tr></thead><tbody>
