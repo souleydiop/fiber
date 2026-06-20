@@ -550,16 +550,17 @@ function buildPathByGPS(originCoord,destCoord,maxGapM=600){
   return chain.length?chain:null;
 }
 
-function placeEventsOnChain(chain,events,totalFibre){
-  const chainLen=chain.reduce((s,{section})=>s+section.length,0);
-  const scale=totalFibre>0?chainLen/totalFibre:1;
+// Place chaque événement à SA distance mesurée (OTDR), brute, sans rééchelonnage.
+// L'origine = début du chaînage (distance 0). On marche le long des sections
+// dans l'ordre jusqu'à atteindre la distance de l'événement.
+function placeEventsOnChain(chain,events){
   return (events||[]).map(ev=>{
-    const d=ev.distance*scale;
     let acc=0,pos=null,secName=null;
     for(const {section,reversed} of chain){
-      if(d<=acc+section.length+0.001||chain[chain.length-1].section===section){
+      const isLast=chain[chain.length-1].section===section;
+      if(ev.distance<=acc+section.length+0.001||isLast){
         const coords=reversed?[...section.coords].reverse():section.coords;
-        pos=interpolateAlong(coords,Math.min(section.length,Math.max(0,d-acc)));
+        pos=interpolateAlong(coords,Math.min(section.length,Math.max(0,ev.distance-acc)));
         secName=section.name; break;
       }
       acc+=section.length;
@@ -594,12 +595,10 @@ async function fetchRoadRoute(oGPS,dGPS,timeoutMs=9000){
   }
 }
 
-function placeEventsOnRoute(routeCoords,events,routeDist,totalFibre){
-  const scale=totalFibre>0?routeDist/totalFibre:1;
-  return (events||[]).map(ev=>{
-    const d=Math.min(routeDist,Math.max(0,ev.distance*scale));
-    return {...ev,pos:interpolateAlong(routeCoords,d)};
-  });
+// Place chaque événement à SA distance mesurée (OTDR), brute, le long de la route.
+// interpolateAlong gère automatiquement le dépassement (renvoie le dernier point).
+function placeEventsOnRoute(routeCoords,events){
+  return (events||[]).map(ev=>({...ev,pos:interpolateAlong(routeCoords,ev.distance)}));
 }
 
 async function correlateLinear(measure){
@@ -619,25 +618,28 @@ async function correlateLinear(measure){
     if(chain && chain.length){
       const total=chain.reduce((s,{section})=>s+(section.length||0),0);
       if(total>0 && isFinite(total)){
-        const events=placeEventsOnChain(chain,measure.events,measure.finFibre||total);
-        return {chain,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,mode:'chain'};
+        const events=placeEventsOnChain(chain,measure.events);
+        const gapPct=measure.finFibre?Math.abs(total-measure.finFibre)/measure.finFibre*100:null;
+        return {chain,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,measureLen:measure.finFibre,gapPct,mode:'chain'};
       }
     }
 
     // 2) Pas de tracé KML : itinéraire routier (route empruntée en voiture)
     const road=await fetchRoadRoute(oGPS,dGPS);
     if(road && road.coords && road.coords.length>1 && road.distance>0){
-      const events=placeEventsOnRoute(road.coords,measure.events,road.distance,measure.finFibre||road.distance);
-      return {routeCoords:road.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:road.distance,mode:'road'};
+      const events=placeEventsOnRoute(road.coords,measure.events);
+      const gapPct=measure.finFibre?Math.abs(road.distance-measure.finFibre)/measure.finFibre*100:null;
+      return {routeCoords:road.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:road.distance,measureLen:measure.finFibre,gapPct,mode:'road'};
     }
 
     // 3) Dernier repli : ligne droite (pas d'internet ou route introuvable)
+    // Ici uniquement, on utilise un ratio car il n'y a pas de géométrie réelle à parcourir.
     const total=measure.finFibre||haversine(oGPS[0],oGPS[1],dGPS[0],dGPS[1]);
     const events=(measure.events||[]).map(ev=>{
       const r=total>0?Math.min(1,Math.max(0,ev.distance/total)):0;
       return {...ev,pos:[oGPS[0]+(dGPS[0]-oGPS[0])*r,oGPS[1]+(dGPS[1]-oGPS[1])*r]};
     });
-    return {events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,mode:'linear'};
+    return {events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,measureLen:measure.finFibre,mode:'linear'};
   }catch(e){
     console.error('correlateLinear a échoué:',e);
     return {error:'Erreur de calcul : '+e.message};
@@ -720,11 +722,17 @@ function renderCorrelationResult(result,measure){
   const modeLabel = result.mode==='chain' ? '🟢 Tracé fibre (KML)'
     : result.mode==='road' ? '🔵 Itinéraire routier'
     : '⚪ Ligne directe (approximation)';
+  const gapWarning = (result.gapPct!=null && result.gapPct>15)
+    ? `<div class="row" style="color:var(--fault);"><span class="sub">⚠ Écart important</span><strong>${result.gapPct.toFixed(0)}%</strong></div>
+       <p class="sub" style="color:var(--fault);margin-top:4px;">Le tracé trouvé (${fmtLen(result.total)}) diffère beaucoup de la longueur mesurée OTDR (${fmtLen(result.measureLen)}). Les événements proches de l'extrémité peuvent être mal placés — vérifie les noms de sites ou le tracé KML.</p>`
+    : '';
   div.innerHTML=`
     <div class="card" style="margin-top:8px;">
       <div class="row"><span class="sub">${esc(result.originName)} → ${esc(result.destName)}</span></div>
       <div class="row"><span class="sub">Mode</span><strong>${modeLabel}</strong></div>
-      <div class="row"><span class="sub">Longueur</span><strong>${fmtLen(result.total)}</strong></div>
+      <div class="row"><span class="sub">Longueur tracé</span><strong>${fmtLen(result.total)}</strong></div>
+      ${result.measureLen?`<div class="row"><span class="sub">Longueur mesurée (OTDR)</span><strong>${fmtLen(result.measureLen)}</strong></div>`:''}
+      ${gapWarning}
     </div>
     <div class="tablewrap" style="margin-top:8px;"><table><thead><tr><th>#</th><th>Distance</th><th>Lat</th><th>Lon</th><th></th></tr></thead><tbody>
     ${(result.events||[]).map(ev=>{
