@@ -219,6 +219,116 @@ async function parsePDF(arrayBuffer){
   return pages;
 }
 
+/* ---------------- PARSER EXCEL (mesures terrain, un port = une mesure) ---------------- */
+
+function excelSerialToDate(serial){
+  if(typeof serial!=='number'||!isFinite(serial)) return null;
+  // Epoch Excel = 1899-12-30 (compatible avec le bug de l'an 1900)
+  const ms = Math.round((serial-25569)*86400*1000);
+  const d = new Date(ms);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function normHeader(h){ return (h||'').toString().trim().replace(/\s+/g,' ').toUpperCase(); }
+
+function findExcelCol(headers, candidates){
+  for(const cand of candidates){
+    const idx = headers.findIndex(h=>normHeader(h)===normHeader(cand));
+    if(idx>=0) return idx;
+  }
+  for(const cand of candidates){
+    const idx = headers.findIndex(h=>normHeader(h).includes(normHeader(cand)));
+    if(idx>=0) return idx;
+  }
+  return -1;
+}
+
+// Détermine le statut d'un port : occupé (équipement branché, pas de distance,
+// ou état explicitement "OCCUPE"), mauvais, libre, ou inconnu.
+function computeEtat(etatRaw,distNum,equipRaw){
+  const e = normHeader(etatRaw);
+  const equip = (equipRaw||'').toString().trim();
+  const hasEquip = equip && !/^N\/?A$/i.test(equip);
+  const hasDistance = isFinite(distNum) && distNum>0;
+  if(e.includes('OCCUP') || hasEquip || !hasDistance) return 'OCCUPE';
+  if(e.includes('MAUVAIS')) return 'MAUVAIS';
+  if(e.includes('LIBRE')) return 'LIBRE';
+  return e || null;
+}
+
+// Parse une feuille : une ligne = un port/une fibre = une mesure.
+// Origine/Extrémité ne sont jamais déduites automatiquement du fichier (champ
+// "SECTION OPTIQUE" ambigu) — l'utilisateur les renseigne dans l'écran
+// Itinéraire, comme pour les mesures PDF. Les dégradations intermédiaires ne
+// sont volontairement pas extraites/affichées (sur demande).
+function parseExcelSheet(sheet){
+  const rows = XLSX.utils.sheet_to_json(sheet,{header:1,raw:true,defval:null});
+  if(!rows.length) return [];
+  const headers = rows[0];
+  const col = {
+    site: findExcelCol(headers,['SITE']),
+    technicien: findExcelCol(headers,["TECHNICIEN D'INTERVENTION",'TECHNICIEN']),
+    date: findExcelCol(headers,['DATE MESURE','DATE']),
+    section: findExcelCol(headers,['SECTION OPTIQUE','SECTION']),
+    cableFO: findExcelCol(headers,['CÂBLE FO','CABLE FO','CABLE']),
+    port: findExcelCol(headers,['PORT']),
+    distance: findExcelCol(headers,['DISTANCE OPTIQUE (M)','DISTANCE OPTIQUE','DISTANCE']),
+    etat: findExcelCol(headers,['ETAT FO (LIBRE / OCCUPE / MAUVAIS)','ETAT FO','ETAT']),
+    equip: findExcelCol(headers,['NOM EQUIPEMENT','EQUIPEMENT']),
+    commentaire: findExcelCol(headers,['COMMENTAIRE']),
+    statutMesure: findExcelCol(headers,['STATUT MESURE']),
+    statutEtiq: findExcelCol(headers,['STATUT ETIQUETAGE']),
+    tickets: findExcelCol(headers,['TICKETS','TICKET']),
+  };
+  if(col.port<0 && col.distance<0) return []; // feuille non reconnue
+
+  const out=[];
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r];
+    if(!row || row.every(c=>c===null||c==='')) continue;
+    const get=(i)=> i>=0 ? row[i] : null;
+
+    const portVal = get(col.port);
+    if(portVal===null || portVal==='') continue; // ligne vide/sans port
+
+    const distRaw = get(col.distance);
+    const distNum = typeof distRaw==='number' ? distRaw : parseFloat(distRaw);
+    const finFibre = isFinite(distNum) && distNum>0 ? distNum : null;
+
+    const etat = computeEtat(get(col.etat), distNum, get(col.equip));
+    const dateVal = get(col.date);
+    const dateMesure = typeof dateVal==='number' ? excelSerialToDate(dateVal) : (dateVal||null);
+
+    out.push({
+      cable: (get(col.section)||get(col.site)||'').toString().trim()||null,
+      fibre: portVal.toString().trim(),
+      cableType: get(col.cableFO),
+      origine: null, extremite: null,
+      finFibre, bilanTotal: null, orl: null,
+      events: [], // dégradations volontairement non extraites
+      etat,
+      nomEquipement: get(col.equip),
+      technicien: get(col.technicien),
+      dateMesure,
+      commentaire: get(col.commentaire),
+      statutMesure: get(col.statutMesure),
+      statutEtiquetage: get(col.statutEtiq),
+      tickets: get(col.tickets),
+    });
+  }
+  return out;
+}
+
+async function parseExcelWorkbook(arrayBuffer){
+  const wb = XLSX.read(arrayBuffer,{type:'array',cellDates:false});
+  let all=[];
+  wb.SheetNames.forEach(name=>{
+    try{ all = all.concat(parseExcelSheet(wb.Sheets[name])); }
+    catch(e){ console.error('Erreur parsing feuille '+name+':',e); }
+  });
+  return all;
+}
+
 function parseKML(text, sourceName, sourceType){
   const doc = new DOMParser().parseFromString(text,'text/xml');
   const placemarks = doc.getElementsByTagName('Placemark');
@@ -310,6 +420,23 @@ async function handleFiles(fileList){
         }
         const parsed=parseKML(text, file.name, sourceType);
         await dbAdd({name:file.name, ext, date:Date.now(), size:file.size, parsed, sourceType});
+      } else if(ext==='xlsx' || ext==='xls'){
+        const buf=await file.arrayBuffer();
+        const rows=await parseExcelWorkbook(buf); // tableau : 1 entrée par port/fibre
+        if(!rows.length){
+          toast('Aucune mesure détectée dans '+file.name);
+        } else {
+          // Toutes les lignes d'un même fichier partagent la même cableKey
+          // (origine/extrémité = null tant que non renseignées) → dès que tu
+          // sauvegardes Origine/Extrémité sur un port, ça se propage à tous.
+          const cableKey=file.name+'|'+(rows[0].origine||'')+'|'+(rows[0].extremite||'');
+          for(let i=0;i<rows.length;i++){
+            const parsed=rows[i];
+            const label = parsed.fibre ? ('Port '+parsed.fibre) : ('ligne '+(i+1));
+            const name = rows.length>1 ? file.name+' — '+label : file.name;
+            await dbAdd({name, ext, date:Date.now(), size:file.size, parsed, cableKey, pageIndex:i});
+          }
+        }
       } else {
         toast('Type de fichier non supporté : '+file.name);
       }
@@ -333,12 +460,13 @@ async function loadAll(){
   AppState.sections=[];
   AppState.points=[];
   recs.forEach(r=>{
-    if(r.ext==='pdf'){
+    if(r.ext==='pdf' || r.ext==='xlsx' || r.ext==='xls'){
       AppState.measures.push({
         recId:r.id, name:r.name, date:r.date,
         manualOrigine:r.manualOrigine||null,
         manualExtremite:r.manualExtremite||null,
         cableKey:r.cableKey||null,
+        source:r.ext==='pdf'?'pdf':'xlsx',
         ...r.parsed
       });
     } else if(r.ext==='kml' || r.ext==='kmz'){
@@ -372,22 +500,40 @@ function renderAccueil(){
 }
 
 function measureCardHTML(m){
-  const nAnom=(m.events||[]).filter(ev=>isAnomalyEvent(ev,m)).length;
+  let badgeClass='ok', badgeText='OK';
+  if(m.source==='xlsx'){
+    if(m.etat==='OCCUPE'){ badgeClass='warn'; badgeText='Occupé'; }
+    else if(m.etat==='MAUVAIS'){ badgeClass='fault'; badgeText='Mauvais'; }
+    else if(m.etat==='LIBRE'){ badgeClass='ok'; badgeText='Libre'; }
+    else { badgeClass='warn'; badgeText=m.etat||'—'; }
+  } else {
+    const nAnom=(m.events||[]).filter(ev=>isAnomalyEvent(ev,m)).length;
+    badgeClass = nAnom>0?'fault':'ok';
+    badgeText = nAnom>0?nAnom+' évt(s)':'OK';
+  }
+  const subLine2 = m.source==='xlsx'
+    ? `<span class="sub">Longueur ${fmtLen(m.finFibre)}${m.nomEquipement?' · '+esc(m.nomEquipement):''}</span>`
+    : `<span class="sub">Bilan ${fmtNum(m.bilanTotal,3)} dB · Longueur ${fmtLen(m.finFibre)}</span>`;
   return `<div class="card tap">
     <div class="row">
-      <strong style="font-size:13px;">${m.cable||m.name}</strong>
-      <span class="badge ${nAnom>0?'fault':'ok'}">${nAnom>0?nAnom+' évt(s)':'OK'}</span>
+      <strong style="font-size:13px;">${esc(m.cable||m.name)}</strong>
+      <span class="badge ${badgeClass}">${esc(badgeText)}</span>
     </div>
-    <div class="row"><span class="sub">Fibre ${m.fibre||'—'} · ${m.manualOrigine||m.origine||'?'} → ${m.manualExtremite||m.extremite||'?'}${m.manualOrigine?'<span style="font-size:9px;color:var(--fiber);margin-left:4px;">● manuel</span>':''}</span></div>
-    <div class="row"><span class="sub">Bilan ${fmtNum(m.bilanTotal,3)} dB · Longueur ${fmtLen(m.finFibre)}</span></div>
+    <div class="row"><span class="sub">Fibre ${esc(m.fibre||'—')} · ${esc(m.manualOrigine||m.origine||'?')} → ${esc(m.manualExtremite||m.extremite||'?')}${m.manualOrigine?'<span style="font-size:9px;color:var(--fiber);margin-left:4px;">● manuel</span>':''}</span></div>
+    <div class="row">${subLine2}</div>
   </div>`;
+}
+function esc(v){
+  if(v==null) return '';
+  try{ return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  catch(e){ return ''; }
 }
 
 /* ---------------- RENDER : MESURES ---------------- */
 function renderMesures(){
   const list=document.getElementById('measuresList');
   if(!AppState.measures.length){
-    list.innerHTML='<div class="empty">Aucun fichier PDF importé.</div>';
+    list.innerHTML='<div class="empty">Aucune mesure importée (PDF ou Excel).</div>';
     return;
   }
   const sorted=[...AppState.measures].sort((a,b)=>b.date-a.date);
@@ -495,31 +641,52 @@ function openMeasureDetail(m){
     headerHtml='<h1>'+esc(m.name||'Mesure')+'</h1>';
   }
 
-  // --- BLOC 3 : TABLEAU ÉVÉNEMENTS — le plus à risque, isolé en dernier ---
+  // --- BLOC 3 : TABLEAU ÉVÉNEMENTS — masqué si vide (cas mesures Excel) ---
   var eventsHtml='';
   try{
-    var evRows='';
-    (m.events||[]).forEach(function(ev){
-      var anom=false;
-      try{ anom=isAnomalyEvent(ev,m); }catch(e2){}
-      var cls=anom?'fault':'';
-      evRows+='<tr class="event-row '+cls+'">'
-        +'<td>'+esc(ev.num)+'</td>'
-        +'<td>'+esc(fmtNum(ev.distance,1))+' m</td>'
-        +'<td>'+(ev.affaib!=null?esc(fmtNum(ev.affaib,3)):'&#8212;')+'</td>'
-        +'<td>'+(ev.reflect!=null?esc(fmtNum(ev.reflect,2)):'&#8212;')+'</td>'
-        +'<td>'+(ev.pente!=null?esc(fmtNum(ev.pente,3)):'&#8212;')+'</td>'
-        +'<td>'+(ev.bilan!=null?esc(fmtNum(ev.bilan,3)):'&#8212;')+'</td>'
-        +'</tr>';
-    });
-    eventsHtml=''
-      +'<h2>&#201;v&#233;nements OTDR</h2>'
-      +'<div class="tablewrap"><table><thead>'
-      +'<tr><th>#</th><th>Distance</th><th>Aff.</th><th>R&#233;fl.</th><th>Pente</th><th>Bilan</th></tr>'
-      +'</thead><tbody>'+evRows+'</tbody></table></div>';
+    if((m.events||[]).length>0){
+      var evRows='';
+      (m.events||[]).forEach(function(ev){
+        var anom=false;
+        try{ anom=isAnomalyEvent(ev,m); }catch(e2){}
+        var cls=anom?'fault':'';
+        evRows+='<tr class="event-row '+cls+'">'
+          +'<td>'+esc(ev.num)+'</td>'
+          +'<td>'+esc(fmtNum(ev.distance,1))+' m</td>'
+          +'<td>'+(ev.affaib!=null?esc(fmtNum(ev.affaib,3)):'&#8212;')+'</td>'
+          +'<td>'+(ev.reflect!=null?esc(fmtNum(ev.reflect,2)):'&#8212;')+'</td>'
+          +'<td>'+(ev.pente!=null?esc(fmtNum(ev.pente,3)):'&#8212;')+'</td>'
+          +'<td>'+(ev.bilan!=null?esc(fmtNum(ev.bilan,3)):'&#8212;')+'</td>'
+          +'</tr>';
+      });
+      eventsHtml=''
+        +'<h2>&#201;v&#233;nements OTDR</h2>'
+        +'<div class="tablewrap"><table><thead>'
+        +'<tr><th>#</th><th>Distance</th><th>Aff.</th><th>R&#233;fl.</th><th>Pente</th><th>Bilan</th></tr>'
+        +'</thead><tbody>'+evRows+'</tbody></table></div>';
+    } else if(m.source==='xlsx'){
+      // Infos terrain issues de la mesure Excel (pas de table d'événements pour ce format)
+      var etatColor = m.etat==='MAUVAIS' ? 'var(--fault)' : m.etat==='OCCUPE' ? 'var(--warn)' : 'var(--fiber)';
+      var rows=[];
+      rows.push(['&#201;tat', '<span style="color:'+etatColor+';font-weight:600;">'+esc(m.etat||'&#8212;')+'</span>']);
+      if(m.nomEquipement) rows.push(['&#201;quipement', esc(m.nomEquipement)]);
+      if(m.cableType) rows.push(['Type c&#226;ble', esc(m.cableType)]);
+      if(m.technicien) rows.push(['Technicien', esc(m.technicien)]);
+      if(m.dateMesure){
+        var dStr = (m.dateMesure instanceof Date) ? m.dateMesure.toLocaleDateString('fr-FR') : esc(m.dateMesure);
+        rows.push(['Date mesure', dStr]);
+      }
+      if(m.statutMesure) rows.push(['Statut mesure', esc(m.statutMesure)]);
+      if(m.statutEtiquetage) rows.push(['&#201;tiquetage', esc(m.statutEtiquetage)]);
+      if(m.tickets) rows.push(['Ticket', esc(m.tickets)]);
+      if(m.commentaire) rows.push(['Commentaire', esc(m.commentaire)]);
+      eventsHtml = '<h2>Infos terrain</h2><div class="card">'
+        + rows.map(function(r){return '<div class="row"><span class="sub">'+r[0]+'</span><span>'+r[1]+'</span></div>';}).join('')
+        + '</div>';
+    }
   }catch(e){
     console.error('eventsHtml error',e);
-    eventsHtml='<h2>&#201;v&#233;nements OTDR</h2><p class="sub" style="color:var(--fault);">Erreur d\'affichage du tableau ('+esc(e.message)+').</p>';
+    eventsHtml='<p class="sub" style="color:var(--fault);">Erreur d\'affichage ('+esc(e.message)+').</p>';
   }
 
   // --- Assemblage final : header, tableau, puis itinéraire (toujours présent) ---

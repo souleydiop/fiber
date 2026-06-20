@@ -59,6 +59,7 @@ p.sub{font-size:12px;color:var(--muted);line-height:1.5;}
 .badge.kmz{background:#10342a;color:var(--fiber);}
 .badge.fault{background:#3a1414;color:var(--fault);}
 .badge.ok{background:#10342a;color:var(--fiber);}
+.badge.warn{background:#3a2f12;color:var(--warn);}
 
 .btn{
   display:inline-flex;align-items:center;justify-content:center;gap:6px;
@@ -198,7 +199,7 @@ a.linklike{color:var(--signal);text-decoration:none;}
       <div class="card">
         <p class="sub" style="margin-bottom:10px;">PDF de mesures OTDR (Viavi), fichiers KML/KMZ de tracé optique ou de sites BTS. Multi-fichiers acceptés.</p>
         <button class="btn" id="btnImport">Choisir des fichiers</button>
-        <input type="file" id="fileInput" multiple accept=".pdf,.kml,.kmz">
+        <input type="file" id="fileInput" multiple accept=".pdf,.kml,.kmz,.xlsx,.xls">
         <div class="progress" id="importProgress" style="display:none;"><div></div></div>
       </div>
 
@@ -301,6 +302,7 @@ a.linklike{color:var(--signal);text-decoration:none;}
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>
