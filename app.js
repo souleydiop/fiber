@@ -219,6 +219,141 @@ async function parsePDF(arrayBuffer){
   return pages;
 }
 
+/* ---------------- PARSER EXCEL (mesures terrain) ----------------
+   Un fichier Excel = UNE mesure (un câble), comme une fiche PDF. Chaque PORT
+   devient un "événement" de la liste, dans le même format que les événements
+   OTDR d'un PDF :
+     # = numéro de port (1 → dernier)
+     Distance = "Distance Optique (m)"
+     Affaiblissement = "Degradation/dB" (valeur la plus forte si plusieurs
+       valeurs séparées par "/")
+   Origine/Extrémité sont à renseigner manuellement (comme pour un PDF), et
+   l'itinéraire se génère ensuite exactement de la même façon (chain/route/
+   ligne directe) puisque les "événements" ont la même forme {num,distance,...}.
+*/
+
+function excelSerialToDate(serial){
+  if(typeof serial!=='number'||!isFinite(serial)) return null;
+  const ms = Math.round((serial-25569)*86400*1000); // epoch Excel = 1899-12-30
+  const d = new Date(ms);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function normHeader(h){ return (h||'').toString().trim().replace(/\s+/g,' ').toUpperCase(); }
+
+function findExcelCol(headers, candidates){
+  for(const cand of candidates){
+    const idx = headers.findIndex(h=>normHeader(h)===normHeader(cand));
+    if(idx>=0) return idx;
+  }
+  for(const cand of candidates){
+    const idx = headers.findIndex(h=>normHeader(h).includes(normHeader(cand)));
+    if(idx>=0) return idx;
+  }
+  return -1;
+}
+
+// Affaiblissement représentatif d'un port : la valeur la plus forte parmi
+// celles séparées par "/" (priorité au défaut le plus sévère).
+function parseDegradation(raw){
+  if(raw==null || raw==='') return null;
+  const parts = raw.toString().split('/').map(s=>parseFloat(s.trim())).filter(n=>isFinite(n));
+  return parts.length ? Math.max(...parts) : null;
+}
+
+// Statut d'un port : occupé (équipement branché, pas de distance exploitable,
+// ou état explicitement "OCCUPE"), mauvais, libre, ou inconnu.
+function computeEtat(etatRaw,distNum,equipRaw){
+  const e = normHeader(etatRaw);
+  const equip = (equipRaw||'').toString().trim();
+  const hasEquip = equip && !/^N\/?A$/i.test(equip);
+  const hasDistance = isFinite(distNum) && distNum>0;
+  if(e.includes('OCCUP') || hasEquip || !hasDistance) return 'OCCUPE';
+  if(e.includes('MAUVAIS')) return 'MAUVAIS';
+  if(e.includes('LIBRE')) return 'LIBRE';
+  return e || null;
+}
+
+// Parse une feuille en UNE mesure : chaque port devient un "événement"
+// {num, distance, affaib, ...} — même structure que les événements OTDR PDF.
+function parseExcelSheet(sheet){
+  const rows = XLSX.utils.sheet_to_json(sheet,{header:1,raw:true,defval:null});
+  if(!rows.length) return null;
+  const headers = rows[0];
+  const col = {
+    site: findExcelCol(headers,['SITE']),
+    section: findExcelCol(headers,['SECTION OPTIQUE','SECTION']),
+    cableFO: findExcelCol(headers,['CÂBLE FO','CABLE FO','CABLE']),
+    port: findExcelCol(headers,['PORT']),
+    distance: findExcelCol(headers,['DISTANCE OPTIQUE (M)','DISTANCE OPTIQUE','DISTANCE']),
+    etat: findExcelCol(headers,['ETAT FO (LIBRE / OCCUPE / MAUVAIS)','ETAT FO','ETAT']),
+    equip: findExcelCol(headers,['NOM EQUIPEMENT','EQUIPEMENT']),
+    degrad: findExcelCol(headers,['DEGRADATION/DB','DEGRADATION','D&#201;GRADATION']),
+  };
+  if(col.port<0) return null; // feuille non reconnue (pas de colonne Port)
+
+  const events=[];
+  let occupiedCount=0, cableLabel=null;
+
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r];
+    if(!row || row.every(c=>c===null||c==='')) continue;
+    const get=(i)=> i>=0 ? row[i] : null;
+
+    const portVal = get(col.port);
+    if(portVal===null || portVal==='') continue;
+
+    if(!cableLabel) cableLabel = (get(col.section)||get(col.site)||'').toString().trim()||null;
+
+    const distRaw = get(col.distance);
+    const distNum = typeof distRaw==='number' ? distRaw : parseFloat(distRaw);
+    const hasDistance = isFinite(distNum) && distNum>0;
+    const etat = computeEtat(get(col.etat), hasDistance?distNum:NaN, get(col.equip));
+
+    if(etat==='OCCUPE' || !hasDistance){ occupiedCount++; continue; }
+
+    events.push({
+      num: isFinite(parseFloat(portVal)) ? parseFloat(portVal) : portVal.toString(),
+      distance: distNum,
+      affaib: parseDegradation(get(col.degrad)),
+      reflect: null, pente: null, bilan: null,
+      etat
+    });
+  }
+  if(!events.length) return null;
+
+  // Tri par numéro de port croissant (1 → dernier)
+  events.sort((a,b)=>{
+    const na=typeof a.num==='number'?a.num:parseFloat(a.num);
+    const nb=typeof b.num==='number'?b.num:parseFloat(b.num);
+    if(isFinite(na)&&isFinite(nb)) return na-nb;
+    return String(a.num).localeCompare(String(b.num));
+  });
+
+  return {
+    cable: cableLabel,
+    fibre: events.length+' port(s)',
+    origine: null, extremite: null,
+    finFibre: Math.max(...events.map(e=>e.distance)),
+    bilanTotal: null, orl: null,
+    events,
+    occupiedCount,
+    source:'xlsx'
+  };
+}
+
+async function parseExcelWorkbook(arrayBuffer){
+  const wb = XLSX.read(arrayBuffer,{type:'array',cellDates:false});
+  const out=[];
+  wb.SheetNames.forEach(name=>{
+    try{
+      const m=parseExcelSheet(wb.Sheets[name]);
+      if(m) out.push(m);
+    }catch(e){ console.error('Erreur parsing feuille '+name+':',e); }
+  });
+  return out; // un élément par feuille reconnue (généralement 1 = 1 fichier)
+}
+
 function parseKML(text, sourceName, sourceType){
   const doc = new DOMParser().parseFromString(text,'text/xml');
   const placemarks = doc.getElementsByTagName('Placemark');
@@ -310,6 +445,18 @@ async function handleFiles(fileList){
         }
         const parsed=parseKML(text, file.name, sourceType);
         await dbAdd({name:file.name, ext, date:Date.now(), size:file.size, parsed, sourceType});
+      } else if(ext==='xlsx' || ext==='xls'){
+        const buf=await file.arrayBuffer();
+        const sheets=await parseExcelWorkbook(buf); // généralement 1 mesure (1 câble)
+        if(!sheets.length){
+          toast('Aucune mesure détectée dans '+file.name);
+        } else {
+          for(let s=0;s<sheets.length;s++){
+            const parsed=sheets[s];
+            const name = sheets.length>1 ? file.name+' — feuille '+(s+1) : file.name;
+            await dbAdd({name, ext, date:Date.now(), size:file.size, parsed});
+          }
+        }
       } else {
         toast('Type de fichier non supporté : '+file.name);
       }
@@ -333,7 +480,7 @@ async function loadAll(){
   AppState.sections=[];
   AppState.points=[];
   recs.forEach(r=>{
-    if(r.ext==='pdf'){
+    if(r.ext==='pdf' || r.ext==='xlsx' || r.ext==='xls'){
       AppState.measures.push({
         recId:r.id, name:r.name, date:r.date,
         manualOrigine:r.manualOrigine||null,
@@ -609,14 +756,18 @@ function placeEventsOnChain(chain,events){
 // Itinéraire routier (OSRM, service public gratuit, profil "driving")
 // Utilisé quand aucun tracé KML ne relie les deux sites : on calcule la route
 // réelle empruntée par une voiture entre l'origine et l'extrémité.
-// Tentative 1 : sans péage. Le serveur public OSRM gère mal "exclude=toll"
-// (renvoie souvent "NoRoute" même quand un chemin existe — bug connu du
-// profil par défaut). Si ça échoue pour cette raison, on retente sans
-// l'exclusion plutôt que d'abandonner vers la ligne droite.
-async function fetchRoadRouteOnce(oGPS,dGPS,excludeToll,timeoutMs){
+// "exclude=toll" n'est PAS fiable sur le serveur démo public (souvent ignoré
+// ou renvoie "NoRoute" — confirmé par les mainteneurs OSRM eux-mêmes et de
+// nombreux retours d'utilisateurs). "exclude=motorway" est en revanche
+// officiellement documenté et fonctionne. Au Sénégal, les autoroutes à péage
+// (AIBD, Ila Touba...) sont taguées "motorway" dans OpenStreetMap, alors que
+// les routes nationales (RN1, RN2...) sont taguées "trunk"/"primary" —
+// exclure les motorway revient donc à forcer le passage par les routes
+// nationales et éviter les péages.
+async function fetchRoadRouteOnce(oGPS,dGPS,excludeMotorway,timeoutMs){
   const url='https://router.project-osrm.org/route/v1/driving/'
     +oGPS[1]+','+oGPS[0]+';'+dGPS[1]+','+dGPS[0]
-    +'?overview=full&geometries=geojson'+(excludeToll?'&exclude=toll':'');
+    +'?overview=full&geometries=geojson'+(excludeMotorway?'&exclude=motorway':'');
   const ctrl=new AbortController();
   const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
   try{
@@ -631,14 +782,14 @@ async function fetchRoadRouteOnce(oGPS,dGPS,excludeToll,timeoutMs){
     return {coords, distance:route.distance};
   }catch(e){
     clearTimeout(timer);
-    console.error('fetchRoadRoute('+(excludeToll?'sans péage':'avec péage')+') a échoué:',e);
+    console.error('fetchRoadRoute('+(excludeMotorway?'route nationale':'tous axes')+') a échoué:',e);
     return null;
   }
 }
 async function fetchRoadRoute(oGPS,dGPS,timeoutMs=9000){
-  const withoutToll=await fetchRoadRouteOnce(oGPS,dGPS,true,timeoutMs);
-  if(withoutToll) return withoutToll;
-  console.error('Itinéraire sans péage indisponible (limite connue du serveur OSRM public) — nouvelle tentative avec péage autorisé.');
+  const national=await fetchRoadRouteOnce(oGPS,dGPS,true,timeoutMs);
+  if(national) return national;
+  console.error('Itinéraire route nationale indisponible pour ce trajet — nouvelle tentative tous axes (autoroute possible).');
   return await fetchRoadRouteOnce(oGPS,dGPS,false,timeoutMs);
 }
 
