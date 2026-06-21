@@ -757,17 +757,17 @@ function placeEventsOnChain(chain,events){
 // Utilisé quand aucun tracé KML ne relie les deux sites : on calcule la route
 // réelle empruntée par une voiture entre l'origine et l'extrémité.
 // "exclude=toll" n'est PAS fiable sur le serveur démo public (souvent ignoré
-// ou renvoie "NoRoute" — confirmé par les mainteneurs OSRM eux-mêmes et de
-// nombreux retours d'utilisateurs). "exclude=motorway" est en revanche
-// officiellement documenté et fonctionne. Au Sénégal, les autoroutes à péage
-// (AIBD, Ila Touba...) sont taguées "motorway" dans OpenStreetMap, alors que
-// les routes nationales (RN1, RN2...) sont taguées "trunk"/"primary" —
-// exclure les motorway revient donc à forcer le passage par les routes
-// nationales et éviter les péages.
-async function fetchRoadRouteOnce(oGPS,dGPS,excludeMotorway,timeoutMs){
+// ou renvoie "NoRoute"). On utilise donc "exclude=motorway"/"trunk", classes
+// officiellement supportées. Au Sénégal, certains tronçons d'autoroute à
+// péage sont tagués "motorway" dans OpenStreetMap, d'autres "trunk" selon le
+// contributeur — d'où un repli en cascade, du plus strict au plus permissif :
+//   1) motorway + trunk exclus (évite le plus d'axes à péage possible)
+//   2) motorway seul exclu (si la combinaison ci-dessus ne trouve pas de route)
+//   3) tous axes autorisés (dernier recours, pour ne jamais bloquer le calcul)
+async function fetchRoadRouteOnce(oGPS,dGPS,excludeParam,timeoutMs){
   const url='https://router.project-osrm.org/route/v1/driving/'
     +oGPS[1]+','+oGPS[0]+';'+dGPS[1]+','+dGPS[0]
-    +'?overview=full&geometries=geojson'+(excludeMotorway?'&exclude=motorway':'');
+    +'?overview=full&geometries=geojson'+(excludeParam?'&exclude='+excludeParam:'');
   const ctrl=new AbortController();
   const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
   try{
@@ -779,18 +779,23 @@ async function fetchRoadRouteOnce(oGPS,dGPS,excludeMotorway,timeoutMs){
     const route=data.routes[0];
     // GeoJSON = [lon,lat] → on convertit en [lat,lon] pour Leaflet
     const coords=route.geometry.coordinates.map(c=>[c[1],c[0]]);
-    return {coords, distance:route.distance};
+    return {coords, distance:route.distance, excludeUsed:excludeParam||'aucun'};
   }catch(e){
     clearTimeout(timer);
-    console.error('fetchRoadRoute('+(excludeMotorway?'route nationale':'tous axes')+') a échoué:',e);
+    console.error('fetchRoadRoute(exclude='+(excludeParam||'aucun')+') a échoué:',e);
     return null;
   }
 }
 async function fetchRoadRoute(oGPS,dGPS,timeoutMs=9000){
-  const national=await fetchRoadRouteOnce(oGPS,dGPS,true,timeoutMs);
-  if(national) return national;
-  console.error('Itinéraire route nationale indisponible pour ce trajet — nouvelle tentative tous axes (autoroute possible).');
-  return await fetchRoadRouteOnce(oGPS,dGPS,false,timeoutMs);
+  const tiers=['motorway,trunk','motorway',''];
+  for(let i=0;i<tiers.length;i++){
+    const r=await fetchRoadRouteOnce(oGPS,dGPS,tiers[i],timeoutMs);
+    if(r){
+      if(i>0) console.error('Niveau d\'évitement réduit à "'+(tiers[i]||'aucun')+'" (niveau précédent indisponible pour ce trajet).');
+      return r;
+    }
+  }
+  return null;
 }
 
 // Itinéraire OSRM (voiture, sans péage) pris comme tracé global depuis l'origine.
@@ -829,7 +834,7 @@ async function correlateLinear(measure){
     const road=await fetchRoadRoute(oGPS,dGPS);
     if(road && road.coords && road.coords.length>1 && road.distance>0){
       const events=placeEventsOnRoute(road.coords,measure.events);
-      return {routeCoords:road.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:road.distance,measureLen:measure.finFibre,mode:'road'};
+      return {routeCoords:road.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:road.distance,measureLen:measure.finFibre,excludeUsed:road.excludeUsed,mode:'road'};
     }
 
     // 3) Dernier repli : ligne droite (pas d'internet ou route introuvable)
@@ -933,11 +938,16 @@ function renderCorrelationResult(result,measure){
     return;
   }
   function esc(v){ return v==null?'':String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  const exclLabel = {
+    'motorway,trunk':'autoroute + nationale rapide évitées',
+    'motorway':'autoroute évitée (national rapide possible)',
+    'aucun':'⚠ tous axes autorisés (autoroute possible)'
+  }[result.excludeUsed] || '';
   const modeLabel = result.mode==='chain' ? '🟢 Tracé fibre (KML)'
-    : result.mode==='road' ? '🔵 Itinéraire routier (sans péage)'
+    : result.mode==='road' ? '🔵 Itinéraire routier'
     : '⚪ Ligne directe (approximation)';
   const roadNote = result.mode==='road'
-    ? `<p class="sub" style="margin-top:4px;">Itinéraire calculé par OSRM (voiture, péages exclus). Chaque événement est placé à sa distance exacte mesurée (OTDR), en suivant cet itinéraire depuis l'origine.</p>`
+    ? `<p class="sub" style="margin-top:4px;">Itinéraire calculé par OSRM (voiture). ${exclLabel}. Chaque événement est placé à sa distance exacte mesurée (OTDR), en suivant cet itinéraire depuis l'origine.</p>`
     : '';
   const gapWarning = (result.mode==='chain' && result.gapPct!=null && result.gapPct>15)
     ? `<div class="row" style="color:var(--fault);"><span class="sub">⚠ Écart important</span><strong>${result.gapPct.toFixed(0)}%</strong></div>
