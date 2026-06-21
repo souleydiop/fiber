@@ -112,6 +112,21 @@ tr.event-row.fault td{color:var(--fault);}
 .waypoint-banner span{font-size:12px;color:var(--text);font-weight:600;flex:1;min-width:0;}
 .waypoint-actions{display:flex;gap:6px;flex-shrink:0;}
 .waypoint-actions .btn{padding:7px 10px;font-size:11px;}
+.waypoint-crosshair{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  z-index:550;pointer-events:none;
+  font-size:32px;color:#ffd454;font-weight:700;
+  text-shadow:0 0 4px rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.9);
+  line-height:1;
+}
+.waypoint-add-btn{
+  position:absolute;bottom:90px;left:50%;transform:translateX(-50%);
+  z-index:550;
+  background:#ffd454;color:#1a1408;border:none;border-radius:999px;
+  padding:12px 22px;font-size:14px;font-weight:700;
+  box-shadow:0 4px 14px rgba(0,0,0,.4);
+  display:flex;align-items:center;gap:6px;
+}
 .map-search{
   position:absolute;top:10px;left:10px;right:104px;z-index:550;
   display:flex;gap:6px;
@@ -205,7 +220,7 @@ a.linklike{color:var(--signal);text-decoration:none;}
 
       <h2>Importer des fichiers</h2>
       <div class="card">
-        <p class="sub" style="margin-bottom:10px;">PDF de mesures OTDR (Viavi), fichiers KML/KMZ de tracé optique, fichier mesure excel ou de sites BTS. Multi-fichiers acceptés.</p>
+        <p class="sub" style="margin-bottom:10px;">PDF de mesures OTDR (Viavi), fichiers KML/KMZ de tracé optique ou de sites BTS. Multi-fichiers acceptés.</p>
         <button class="btn" id="btnImport">Choisir des fichiers</button>
         <input type="file" id="fileInput" multiple accept=".pdf,.kml,.kmz,.xlsx,.xls">
         <div class="progress" id="importProgress" style="display:none;"><div></div></div>
@@ -233,6 +248,8 @@ a.linklike{color:var(--signal);text-decoration:none;}
         <button id="btnWaypointDone" class="btn small">✓ Terminer</button>
       </div>
     </div>
+    <div class="waypoint-crosshair" id="waypointCrosshair" style="display:none;">＋</div>
+    <button class="waypoint-add-btn" id="btnWaypointAdd" style="display:none;">+ Ajouter ici</button>
     <div class="map-controls">
       <button id="btnSearchSite">🔍 Site</button>
       <button id="layerSections" class="on">⎯ Sections</button>

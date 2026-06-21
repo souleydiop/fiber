@@ -1095,9 +1095,11 @@ function openWaypointEditor(){
       if(!AppState.map) initMap();
       if(AppState.map) AppState.map.invalidateSize();
       document.getElementById('waypointBanner').style.display='flex';
+      document.getElementById('waypointCrosshair').style.display='block';
+      document.getElementById('btnWaypointAdd').style.display='flex';
       attachWaypointMapClick();
       redrawWaypointEdit();
-      toast('Touche la carte pour ajouter un point de passage');
+      toast('Vise un endroit puis appuie sur "+ Ajouter ici" (ou touche directement la carte)');
     }catch(e){
       console.error('openWaypointEditor error',e);
       toast('Erreur ouverture éditeur : '+e.message);
@@ -1115,10 +1117,19 @@ function detachWaypointMapClick(){
   AppState.map.off('click', onWaypointMapClick);
   AppState.map._waypointClickAttached=false;
 }
-function onWaypointMapClick(e){
+function addWaypointPoint(lat,lng){
   if(!AppState.waypointMode) return;
-  AppState.waypointMode.points.push([e.latlng.lat, e.latlng.lng]);
+  AppState.waypointMode.points.push([lat,lng]);
   redrawWaypointEdit();
+}
+function addWaypointAtCenter(){
+  if(!AppState.map || !AppState.waypointMode) return;
+  const c=AppState.map.getCenter();
+  addWaypointPoint(c.lat,c.lng);
+  toast('Point ajouté');
+}
+function onWaypointMapClick(e){
+  addWaypointPoint(e.latlng.lat, e.latlng.lng);
 }
 function removeWaypointAt(idx){
   if(!AppState.waypointMode) return;
@@ -1157,14 +1168,16 @@ function redrawWaypointEdit(){
 
   const countEl=document.getElementById('waypointCount');
   if(countEl) countEl.textContent = wm.points.length
-    ? '📍 '+wm.points.length+' point(s) — touche la carte pour ajouter'
-    : '📍 Touche la carte pour ajouter un point';
+    ? '📍 '+wm.points.length+' point(s)'
+    : '📍 Aucun point — vise et appuie sur "+"';
 }
 
 function exitWaypointEditor(){
   detachWaypointMapClick();
   if(AppState.layers.waypointEdit) AppState.layers.waypointEdit.clearLayers();
   document.getElementById('waypointBanner').style.display='none';
+  document.getElementById('waypointCrosshair').style.display='none';
+  document.getElementById('btnWaypointAdd').style.display='none';
   AppState.waypointMode=null;
 }
 
@@ -1567,6 +1580,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   document.getElementById('btnWaypointUndo').addEventListener('click', undoLastWaypoint);
   document.getElementById('btnWaypointCancel').addEventListener('click', cancelWaypointEdit);
   document.getElementById('btnWaypointDone').addEventListener('click', finishWaypointEdit);
+  document.getElementById('btnWaypointAdd').addEventListener('click', addWaypointAtCenter);
 
   // layer toggles
   const toggles={layerSections:'sections', layerSites:'sites', layerJoints:'joints', layerEvents:'events'};
