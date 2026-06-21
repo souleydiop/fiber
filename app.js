@@ -11,6 +11,8 @@ const AppState = {
   points: [],
   siteMarkers: {},
   activeCorrelation: null,
+  waypointMode: null,
+  currentMeasure: null,
   map: null,
   layers: {}
 };
@@ -485,6 +487,7 @@ async function loadAll(){
         recId:r.id, name:r.name, date:r.date,
         manualOrigine:r.manualOrigine||null,
         manualExtremite:r.manualExtremite||null,
+        manualWaypoints:r.manualWaypoints||null,
         cableKey:r.cableKey||null,
         ...r.parsed
       });
@@ -613,6 +616,10 @@ function openMeasureDetail(m){
           +chipPDF(m.extremite,'setExtremite',vB)
           +'<input id="inpExtremite" list="slCorr" value="'+esc(vB)+'" autocomplete="off" oninput="updSt(\'inpExtremite\',\'stB\')"'
           +' style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;">'
+        +'</div>'
+        +'<div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">'
+          +'<span class="sub">'+(m.manualWaypoints&&m.manualWaypoints.length ? '📍 '+m.manualWaypoints.length+' point(s) de passage' : 'Aucun point de passage')+'</span>'
+          +'<button class="btn small secondary" onclick="openWaypointEditor()">📍 Ajuster sur la carte</button>'
         +'</div>'
         +'<div style="display:flex;gap:8px;align-items:center;">'
           +'<button class="btn" style="flex:1;" onclick="applyCorrelation()">&#128506; Tracer l\'itin&#233;raire</button>'
@@ -929,6 +936,21 @@ async function correlateLinear(measure){
     if(!oGPS) return {error:`Site introuvable : "${oName}"\n→ Charge base_site.kmz et vérifie le nom.`};
     if(!dGPS) return {error:`Site introuvable : "${dName}"\n→ Charge base_site.kmz et vérifie le nom.`};
 
+    // 0) Points de passage placés manuellement sur la carte → priorité absolue
+    //    (l'utilisateur sait exactement par où passer, on ne devine plus rien)
+    if(measure.manualWaypoints && measure.manualWaypoints.length){
+      try{
+        const coordsList=[oGPS, ...measure.manualWaypoints, dGPS];
+        let r=await fetchRoadRouteOnce(coordsList,'motorway',9000);
+        if(!r) r=await fetchRoadRouteOnce(coordsList,'',9000);
+        if(r && r.coords && r.coords.length>1 && r.distance>0){
+          const events=placeEventsOnRoute(r.coords,measure.events);
+          return {routeCoords:r.coords,events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total:r.distance,measureLen:measure.finFibre,excludeUsed:'waypoints_manuels',mode:'road'};
+        }
+      }catch(e){ console.error('Itinéraire par waypoints manuels a échoué:',e); }
+      // Si même les waypoints manuels échouent, on continue vers les méthodes automatiques ci-dessous
+    }
+
     // 1) Tracé fibre réel (sections KML chaînées par GPS)
     let chain=null;
     try{ chain=buildPathByGPS(oGPS,dGPS); }
@@ -1045,6 +1067,143 @@ async function saveEndpoints(){
   toast(sharedCount>0 ? `Sauvegardé ✓ (partagé sur ${sharedCount} autre(s) fibre(s))` : 'Sauvegardé ✓');
 }
 
+/* ---------------- ÉDITEUR DE WAYPOINTS (sur la carte) ----------------
+   Permet de forcer manuellement l'itinéraire à passer par des points tapés
+   sur la carte (utile quand la détection automatique de route nationale
+   échoue ou choisit le mauvais chemin). Les points sont sauvegardés sur la
+   mesure (manualWaypoints) et réutilisés à chaque "Tracer l'itinéraire".
+*/
+function openWaypointEditor(){
+  const m=AppState.currentMeasure;
+  if(!m){ toast('Aucune mesure ouverte'); return; }
+  const oName=m.manualOrigine||m.origine, dName=m.manualExtremite||m.extremite;
+  const oGPS=sitePair(oName), dGPS=sitePair(dName);
+  if(!oGPS||!dGPS){
+    toast('Renseigne d\'abord Origine et Extrémité (sites trouvés)');
+    return;
+  }
+
+  AppState.waypointMode={
+    recId:m.recId, oGPS, dGPS,
+    points:(m.manualWaypoints||[]).map(p=>[p[0],p[1]])
+  };
+
+  document.getElementById('detailOverlay').classList.remove('active');
+  switchView('carte');
+  setTimeout(()=>{
+    try{
+      if(!AppState.map) initMap();
+      if(AppState.map) AppState.map.invalidateSize();
+      document.getElementById('waypointBanner').style.display='flex';
+      attachWaypointMapClick();
+      redrawWaypointEdit();
+      toast('Touche la carte pour ajouter un point de passage');
+    }catch(e){
+      console.error('openWaypointEditor error',e);
+      toast('Erreur ouverture éditeur : '+e.message);
+    }
+  },350);
+}
+
+function attachWaypointMapClick(){
+  if(!AppState.map || AppState.map._waypointClickAttached) return;
+  AppState.map.on('click', onWaypointMapClick);
+  AppState.map._waypointClickAttached=true;
+}
+function detachWaypointMapClick(){
+  if(!AppState.map) return;
+  AppState.map.off('click', onWaypointMapClick);
+  AppState.map._waypointClickAttached=false;
+}
+function onWaypointMapClick(e){
+  if(!AppState.waypointMode) return;
+  AppState.waypointMode.points.push([e.latlng.lat, e.latlng.lng]);
+  redrawWaypointEdit();
+}
+function removeWaypointAt(idx){
+  if(!AppState.waypointMode) return;
+  AppState.waypointMode.points.splice(idx,1);
+  redrawWaypointEdit();
+  toast('Point retiré');
+}
+function undoLastWaypoint(){
+  if(!AppState.waypointMode || !AppState.waypointMode.points.length) return;
+  AppState.waypointMode.points.pop();
+  redrawWaypointEdit();
+}
+function redrawWaypointEdit(){
+  if(!AppState.map || !AppState.waypointMode) return;
+  const wm=AppState.waypointMode;
+  AppState.layers.waypointEdit.clearLayers();
+  if(!AppState.layers.waypointEdit._map) AppState.layers.waypointEdit.addTo(AppState.map);
+
+  const allPts=[wm.oGPS, ...wm.points, wm.dGPS];
+  L.polyline(allPts,{color:'#ffd454',weight:3,opacity:.85,dashArray:'6,6'}).addTo(AppState.layers.waypointEdit);
+
+  L.circleMarker(wm.oGPS,{radius:8,color:'#4f9eff',fillColor:'#4f9eff',fillOpacity:1,weight:2})
+    .bindPopup('Origine').addTo(AppState.layers.waypointEdit);
+  L.circleMarker(wm.dGPS,{radius:8,color:'#ffb454',fillColor:'#ffb454',fillOpacity:1,weight:2})
+    .bindPopup('Extrémité').addTo(AppState.layers.waypointEdit);
+
+  wm.points.forEach((p,idx)=>{
+    L.marker(p,{icon:L.divIcon({
+      className:'',
+      html:'<div style="background:#ffd454;color:#1a1408;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #1a1408;">'+(idx+1)+'</div>',
+      iconSize:[24,24], iconAnchor:[12,12]
+    })})
+      .bindPopup('Point '+(idx+1)+'<br><button class="btn small secondary" onclick="removeWaypointAt('+idx+')">🗑 Retirer</button>')
+      .addTo(AppState.layers.waypointEdit);
+  });
+
+  const countEl=document.getElementById('waypointCount');
+  if(countEl) countEl.textContent = wm.points.length
+    ? '📍 '+wm.points.length+' point(s) — touche la carte pour ajouter'
+    : '📍 Touche la carte pour ajouter un point';
+}
+
+function exitWaypointEditor(){
+  detachWaypointMapClick();
+  if(AppState.layers.waypointEdit) AppState.layers.waypointEdit.clearLayers();
+  document.getElementById('waypointBanner').style.display='none';
+  AppState.waypointMode=null;
+}
+
+function cancelWaypointEdit(){
+  exitWaypointEditor();
+  toast('Modifications annulées');
+}
+
+async function finishWaypointEdit(){
+  const wm=AppState.waypointMode;
+  if(!wm) return;
+  try{
+    const recs=await dbGetAll();
+    const rec=recs.find(r=>r.id===wm.recId);
+    if(rec){
+      rec.manualWaypoints = wm.points.length ? wm.points : null;
+      await dbUpdate(rec);
+    }
+    const pointsSnapshot=wm.points.slice();
+    exitWaypointEditor();
+    await loadAll();
+    toast(pointsSnapshot.length ? 'Points enregistrés ✓ — recalcul…' : 'Points effacés ✓ — recalcul…');
+
+    // Relance immédiatement la corrélation avec ces points pour montrer le résultat
+    const m=AppState.measures.find(x=>x.recId===wm.recId);
+    if(m){
+      AppState.currentMeasure=m;
+      const result=await correlateLinear(m);
+      AppState.correlations[m.recId]=result;
+      AppState.activeCorrelation={result, measure:m};
+      if(!result.error) drawCorrelationLayer();
+      else toast('Erreur itinéraire : '+result.error.split('\n')[0]);
+    }
+  }catch(e){
+    console.error('finishWaypointEdit error',e);
+    toast('Erreur : '+e.message);
+  }
+}
+
 function renderCorrelationResult(result,measure){
   const div=document.getElementById('corrResult');
   if(!div) return;
@@ -1054,6 +1213,7 @@ function renderCorrelationResult(result,measure){
   }
   function esc(v){ return v==null?'':String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   const exclLabel = {
+    'waypoints_manuels':'📍 points de passage manuels appliqués',
     'route_nationale':'✓ tracé réel de la route nationale (OSM) imposé',
     'motorway,trunk':'autoroute + nationale rapide évitées',
     'motorway':'autoroute évitée (national rapide possible)',
@@ -1209,6 +1369,7 @@ function initMap(){
   AppState.layers.joints=L.layerGroup();
   AppState.layers.events=L.layerGroup().addTo(AppState.map);
   AppState.layers.correlation=L.layerGroup().addTo(AppState.map);
+  AppState.layers.waypointEdit=L.layerGroup().addTo(AppState.map);
 }
 function renderMap(){
   AppState.siteMarkers={};
@@ -1403,6 +1564,10 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     if(e.key==='Enter'){ e.preventDefault(); searchSite(); }
   });
 
+  document.getElementById('btnWaypointUndo').addEventListener('click', undoLastWaypoint);
+  document.getElementById('btnWaypointCancel').addEventListener('click', cancelWaypointEdit);
+  document.getElementById('btnWaypointDone').addEventListener('click', finishWaypointEdit);
+
   // layer toggles
   const toggles={layerSections:'sections', layerSites:'sites', layerJoints:'joints', layerEvents:'events'};
   Object.entries(toggles).forEach(([btnId,layerKey])=>{
@@ -1444,3 +1609,5 @@ window.saveEndpoints = saveEndpoints;
 window.setOrigine = setOrigine;
 window.setExtremite = setExtremite;
 window.updSt = updSt;
+window.openWaypointEditor = openWaypointEditor;
+window.removeWaypointAt = removeWaypointAt;

@@ -103,6 +103,15 @@ tr.event-row.fault td{color:var(--fault);}
   display:flex;align-items:center;gap:6px;
 }
 .map-controls button.on{border-color:var(--signal);color:var(--signal);}
+.waypoint-banner{
+  position:absolute;top:10px;left:10px;right:10px;z-index:600;
+  background:var(--surface);border:1px solid var(--signal);border-radius:10px;
+  padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;
+  box-shadow:0 4px 14px rgba(0,0,0,.4);
+}
+.waypoint-banner span{font-size:12px;color:var(--text);font-weight:600;flex:1;min-width:0;}
+.waypoint-actions{display:flex;gap:6px;flex-shrink:0;}
+.waypoint-actions .btn{padding:7px 10px;font-size:11px;}
 .map-search{
   position:absolute;top:10px;left:10px;right:104px;z-index:550;
   display:flex;gap:6px;
@@ -215,6 +224,14 @@ a.linklike{color:var(--signal);text-decoration:none;}
       <datalist id="mapSiteList"></datalist>
       <button id="mapSearchGo" class="btn small">🔍</button>
       <button id="mapSearchClose" class="btn small secondary">✕</button>
+    </div>
+    <div class="waypoint-banner" id="waypointBanner" style="display:none;">
+      <span id="waypointCount">📍 Touche la carte pour ajouter un point</span>
+      <div class="waypoint-actions">
+        <button id="btnWaypointUndo" class="btn small secondary">↩︎</button>
+        <button id="btnWaypointCancel" class="btn small secondary">Annuler</button>
+        <button id="btnWaypointDone" class="btn small">✓ Terminer</button>
+      </div>
     </div>
     <div class="map-controls">
       <button id="btnSearchSite">🔍 Site</button>
