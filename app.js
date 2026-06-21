@@ -703,9 +703,14 @@ function sitePair(name){
   return s?[s.lat,s.lon]:null;
 }
 
-function buildPathByGPS(originCoord,destCoord,maxGapM=600){
-  if(!AppState.sections.length) return null;
-  const secs=AppState.sections.map(s=>({s,A:s.coords[0],B:s.coords[s.coords.length-1]}));
+// Chaîne une liste générique de sections {id, coords:[[lat,lon],...]} par
+// proximité GPS, depuis originCoord vers destCoord (algorithme glouton :
+// à chaque étape, on rattache la section non utilisée la plus proche du
+// dernier point atteint). Réutilisé à la fois pour les sections KML du
+// tracé fibre ET pour les tronçons de route nationale OSM (Overpass).
+function chainSectionsByGPS(sections,originCoord,destCoord,maxGapM){
+  if(!sections.length) return null;
+  const secs=sections.map(s=>({s,A:s.coords[0],B:s.coords[s.coords.length-1]}));
   let bestD=Infinity,startSec=null,startRev=false;
   secs.forEach(({s,A,B})=>{
     const dA=haversine(originCoord[0],originCoord[1],A[0],A[1]);
@@ -716,7 +721,7 @@ function buildPathByGPS(originCoord,destCoord,maxGapM=600){
   if(!startSec||bestD>maxGapM*3) return null;
   const used=new Set(); const chain=[];
   let cur=startSec,rev=startRev;
-  for(let i=0;i<=AppState.sections.length;i++){
+  for(let i=0;i<=sections.length;i++){
     used.add(cur.id); chain.push({section:cur,reversed:rev});
     const tip=rev?cur.coords[0]:cur.coords[cur.coords.length-1];
     if(haversine(tip[0],tip[1],destCoord[0],destCoord[1])<maxGapM) break;
@@ -732,6 +737,9 @@ function buildPathByGPS(originCoord,destCoord,maxGapM=600){
     cur=nSec; rev=nRev;
   }
   return chain.length?chain:null;
+}
+function buildPathByGPS(originCoord,destCoord,maxGapM=600){
+  return chainSectionsByGPS(AppState.sections,originCoord,destCoord,maxGapM);
 }
 
 // Place chaque événement à SA distance mesurée (OTDR), brute, sans rééchelonnage.
@@ -753,20 +761,16 @@ function placeEventsOnChain(chain,events){
   });
 }
 
-// Itinéraire routier (OSRM, service public gratuit, profil "driving")
-// Utilisé quand aucun tracé KML ne relie les deux sites : on calcule la route
-// réelle empruntée par une voiture entre l'origine et l'extrémité.
-// "exclude=toll" n'est PAS fiable sur le serveur démo public (souvent ignoré
-// ou renvoie "NoRoute"). On utilise donc "exclude=motorway"/"trunk", classes
-// officiellement supportées. Au Sénégal, certains tronçons d'autoroute à
-// péage sont tagués "motorway" dans OpenStreetMap, d'autres "trunk" selon le
-// contributeur — d'où un repli en cascade, du plus strict au plus permissif :
-//   1) motorway + trunk exclus (évite le plus d'axes à péage possible)
-//   2) motorway seul exclu (si la combinaison ci-dessus ne trouve pas de route)
-//   3) tous axes autorisés (dernier recours, pour ne jamais bloquer le calcul)
-async function fetchRoadRouteOnce(oGPS,dGPS,excludeParam,timeoutMs){
-  const url='https://router.project-osrm.org/route/v1/driving/'
-    +oGPS[1]+','+oGPS[0]+';'+dGPS[1]+','+dGPS[0]
+// Itinéraire routier (OSRM, service public gratuit, profil "driving").
+// fetchRoadRouteOnce accepte maintenant une LISTE de points [lat,lon] (pas
+// seulement origine+destination) pour pouvoir forcer le passage par des
+// points intermédiaires (waypoints) — utilisé pour imposer le tracé réel
+// d'une route nationale plutôt que de se fier aux tags motorway/trunk
+// (peu fiables au Sénégal : certains tronçons d'autoroute à péage sont
+// tagués différemment selon le contributeur OSM).
+async function fetchRoadRouteOnce(coordsList,excludeParam,timeoutMs){
+  const coordsStr=coordsList.map(c=>c[1]+','+c[0]).join(';'); // [lat,lon]→"lon,lat"
+  const url='https://router.project-osrm.org/route/v1/driving/'+coordsStr
     +'?overview=full&geometries=geojson'+(excludeParam?'&exclude='+excludeParam:'');
   const ctrl=new AbortController();
   const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
@@ -777,7 +781,6 @@ async function fetchRoadRouteOnce(oGPS,dGPS,excludeParam,timeoutMs){
     const data=await res.json();
     if(data.code!=='Ok'||!data.routes||!data.routes.length) return null;
     const route=data.routes[0];
-    // GeoJSON = [lon,lat] → on convertit en [lat,lon] pour Leaflet
     const coords=route.geometry.coordinates.map(c=>[c[1],c[0]]);
     return {coords, distance:route.distance, excludeUsed:excludeParam||'aucun'};
   }catch(e){
@@ -786,10 +789,122 @@ async function fetchRoadRouteOnce(oGPS,dGPS,excludeParam,timeoutMs){
     return null;
   }
 }
+
+// Récupère le tracé réel des routes nationales sénégalaises (N1 à N15) via
+// Overpass (données OpenStreetMap), dans une zone bornée autour du trajet,
+// pour les utiliser comme waypoints forcés et garantir le passage par la
+// route nationale plutôt que par une autoroute à péage mal taguée.
+const NATIONAL_ROAD_REFS=['N1','N2','N3','N4','N5','N6','N7','N8','N9','N10','N11','N12','N13','N14','N15'];
+
+async function fetchNationalRoadSections(oGPS,dGPS,timeoutMs=15000){
+  const south=Math.min(oGPS[0],dGPS[0])-0.4, north=Math.max(oGPS[0],dGPS[0])+0.4;
+  const west =Math.min(oGPS[1],dGPS[1])-0.4, east =Math.max(oGPS[1],dGPS[1])+0.4;
+  const refPattern='^(N1|N2|N3|N4|N5|N6|N7|N8|N9|N10|N11|N12|N13|N14|N15)$';
+  const query='[out:json][timeout:20];'
+    +'rel["route"="road"]["ref"~"'+refPattern+'"]('+south+','+west+','+north+','+east+');'
+    +'out geom;';
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
+  try{
+    const res=await fetch('https://overpass-api.de/api/interpreter',{
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:'data='+encodeURIComponent(query),
+      signal:ctrl.signal
+    });
+    clearTimeout(timer);
+    if(!res.ok) return [];
+    const data=await res.json();
+    const sections=[];
+    (data.elements||[]).forEach(el=>{
+      if(el.type!=='relation'||!el.members) return;
+      const ref=(el.tags&&el.tags.ref)||'?';
+      el.members.forEach((mem,idx)=>{
+        if(mem.type==='way' && mem.geometry && mem.geometry.length>=2){
+          sections.push({
+            id:ref+'_'+(mem.ref||idx),
+            coords:mem.geometry.map(g=>[g.lat,g.lon])
+          });
+        }
+      });
+    });
+    return sections;
+  }catch(e){
+    clearTimeout(timer);
+    console.error('fetchNationalRoadSections a échoué:',e);
+    return [];
+  }
+}
+
+// Échantillonne un chaînage de sections en une liste de waypoints espacés
+// d'environ stepM mètres, pour ne pas dépasser une URL OSRM raisonnable.
+function sampleChainWaypoints(chain,stepM=8000,maxPoints=40){
+  const pts=[];
+  let accSinceLastPt=Infinity;
+  chain.forEach(({section,reversed})=>{
+    const coords=reversed?[...section.coords].reverse():section.coords;
+    for(let i=0;i<coords.length;i++){
+      if(i>0){
+        accSinceLastPt+=haversine(coords[i-1][0],coords[i-1][1],coords[i][0],coords[i][1]);
+      }
+      if(accSinceLastPt>=stepM || (pts.length===0)){
+        pts.push(coords[i]);
+        accSinceLastPt=0;
+      }
+    }
+  });
+  // Sous-échantillonnage si trop de points (limite raisonnable d'URL)
+  if(pts.length>maxPoints){
+    const out=[pts[0]];
+    const step=(pts.length-1)/(maxPoints-1);
+    for(let i=1;i<maxPoints-1;i++) out.push(pts[Math.round(i*step)]);
+    out.push(pts[pts.length-1]);
+    return out;
+  }
+  return pts;
+}
+
+// Tente de forcer l'itinéraire OSRM à suivre le tracé réel d'une route
+// nationale (N1-N15) entre origine et extrémité, via des waypoints imposés.
+// Retourne null si aucune route nationale proche n'est trouvée (ou en cas
+// d'échec réseau) — le code appelant retombe alors sur la cascade exclude=.
+async function fetchNationalRoadRoute(oGPS,dGPS,timeoutMs=9000){
+  const sections=await fetchNationalRoadSections(oGPS,dGPS,15000);
+  if(!sections.length) return null;
+  const chain=chainSectionsByGPS(sections,oGPS,dGPS,3000); // tolérance plus large (segments OSM disjoints)
+  if(!chain||chain.length<1) return null;
+
+  // Vérifie que le chaînage couvre bien le trajet (1er et dernier point proches
+  // de l'origine/extrémité réelles) — sinon ce n'est pas la bonne route.
+  const firstPt=chain[0].reversed?chain[0].section.coords[chain[0].section.coords.length-1]:chain[0].section.coords[0];
+  const lastSeg=chain[chain.length-1];
+  const lastPt=lastSeg.reversed?lastSeg.section.coords[0]:lastSeg.section.coords[lastSeg.section.coords.length-1];
+  if(haversine(firstPt[0],firstPt[1],oGPS[0],oGPS[1])>15000) return null;
+  if(haversine(lastPt[0],lastPt[1],dGPS[0],dGPS[1])>15000) return null;
+
+  const waypoints=sampleChainWaypoints(chain);
+  if(waypoints.length<2) return null;
+  const coordsList=[oGPS,...waypoints,dGPS];
+
+  // exclude=motorway en sécurité supplémentaire (au cas où OSRM raccourcit
+  // entre deux waypoints forcés via un tronçon d'autoroute parallèle)
+  let r=await fetchRoadRouteOnce(coordsList,'motorway',timeoutMs);
+  if(!r) r=await fetchRoadRouteOnce(coordsList,'',timeoutMs);
+  if(r) r.excludeUsed='route_nationale';
+  return r;
+}
+
 async function fetchRoadRoute(oGPS,dGPS,timeoutMs=9000){
+  // 1) Priorité : forcer le passage par la route nationale réelle (OSM N1-N15)
+  try{
+    const national=await fetchNationalRoadRoute(oGPS,dGPS,timeoutMs);
+    if(national) return national;
+  }catch(e){ console.error('fetchNationalRoadRoute a échoué:',e); }
+
+  // 2) Repli : cascade d'exclusion par classe de route (motorway/trunk)
   const tiers=['motorway,trunk','motorway',''];
   for(let i=0;i<tiers.length;i++){
-    const r=await fetchRoadRouteOnce(oGPS,dGPS,tiers[i],timeoutMs);
+    const r=await fetchRoadRouteOnce([oGPS,dGPS],tiers[i],timeoutMs);
     if(r){
       if(i>0) console.error('Niveau d\'évitement réduit à "'+(tiers[i]||'aucun')+'" (niveau précédent indisponible pour ce trajet).');
       return r;
@@ -939,6 +1054,7 @@ function renderCorrelationResult(result,measure){
   }
   function esc(v){ return v==null?'':String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   const exclLabel = {
+    'route_nationale':'✓ tracé réel de la route nationale (OSM) imposé',
     'motorway,trunk':'autoroute + nationale rapide évitées',
     'motorway':'autoroute évitée (national rapide possible)',
     'aucun':'⚠ tous axes autorisés (autoroute possible)'
