@@ -81,13 +81,14 @@ function base64ToArrayBuffer(b64){
 }
 
 /* ---------------- INDEXEDDB ---------------- */
-const DB_NAME='ospmanager_db', DB_VER=1, STORE='files';
+const DB_NAME='ospmanager_db', DB_VER=2, STORE='files', ALIAS_STORE='aliases';
 function openDB(){
   return new Promise((resolve,reject)=>{
     const req=indexedDB.open(DB_NAME,DB_VER);
     req.onupgradeneeded=e=>{
       const db=e.target.result;
       if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:'id',autoIncrement:true});
+      if(!db.objectStoreNames.contains(ALIAS_STORE)) db.createObjectStore(ALIAS_STORE,{keyPath:'key'});
     };
     req.onsuccess=e=>resolve(e.target.result);
     req.onerror=e=>reject(e);
@@ -128,6 +129,67 @@ async function dbUpdate(rec){
     req.onsuccess=()=>resolve();
     req.onerror=e=>reject(e);
   });
+}
+
+/* ---------------- ALIAS DE NOMS (mémoire persistante Origine/Extrémité) ----------------
+   Dès qu'une correspondance "texte brut PDF/Excel" → "site confirmé" est
+   validée une fois (bouton 💾), elle est mémorisée ici et réutilisée
+   automatiquement pour TOUTE future mesure (PDF ou Excel) mentionnant le
+   même texte — plus besoin de la ressaisir à chaque nouveau fichier.
+   Deux types de clés :
+     - alias simple : norm(texte brut) → nom de site (cas PDF, Origine et
+       Extrémité détectées séparément)
+     - alias de paire : "PAIR:"+norm(label câble) → {origine,extremite}
+       (cas Excel, où SECTION OPTIQUE ne peut pas être coupé en deux de
+       façon fiable, donc on retient directement le couple confirmé)
+*/
+async function getAlias(rawText){
+  if(!rawText) return null;
+  try{
+    const db=await openDB();
+    return await new Promise((resolve)=>{
+      const tx=db.transaction(ALIAS_STORE,'readonly');
+      const req=tx.objectStore(ALIAS_STORE).get(norm(rawText));
+      req.onsuccess=()=>resolve(req.result?req.result.value:null);
+      req.onerror=()=>resolve(null);
+    });
+  }catch(e){ console.error('getAlias error',e); return null; }
+}
+async function setAlias(rawText,siteName){
+  if(!rawText||!siteName||norm(rawText)===norm(siteName)) return;
+  try{
+    const db=await openDB();
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction(ALIAS_STORE,'readwrite');
+      tx.objectStore(ALIAS_STORE).put({key:norm(rawText), value:siteName, updatedAt:Date.now()});
+      tx.oncomplete=()=>resolve();
+      tx.onerror=e=>reject(e);
+    });
+  }catch(e){ console.error('setAlias error',e); }
+}
+async function getPairAlias(label){
+  if(!label) return null;
+  try{
+    const db=await openDB();
+    return await new Promise((resolve)=>{
+      const tx=db.transaction(ALIAS_STORE,'readonly');
+      const req=tx.objectStore(ALIAS_STORE).get('PAIR:'+norm(label));
+      req.onsuccess=()=>resolve(req.result?req.result.value:null);
+      req.onerror=()=>resolve(null);
+    });
+  }catch(e){ console.error('getPairAlias error',e); return null; }
+}
+async function setPairAlias(label,origine,extremite){
+  if(!label||!origine||!extremite) return;
+  try{
+    const db=await openDB();
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction(ALIAS_STORE,'readwrite');
+      tx.objectStore(ALIAS_STORE).put({key:'PAIR:'+norm(label), value:{origine,extremite}, updatedAt:Date.now()});
+      tx.oncomplete=()=>resolve();
+      tx.onerror=e=>reject(e);
+    });
+  }catch(e){ console.error('setPairAlias error',e); }
 }
 
 /* ---------------- PARSERS ---------------- */
@@ -517,7 +579,7 @@ function renderAccueil(){
   const recent=[...AppState.measures].sort((a,b)=>b.date-a.date).slice(0,5);
   list.innerHTML=recent.map(m=>measureCardHTML(m)).join('');
   list.querySelectorAll('.card').forEach((el,idx)=>{
-    el.addEventListener('click',()=>{ switchView('mesures'); openMeasureDetail(recent[idx]); });
+    el.addEventListener('click',async()=>{ switchView('mesures'); await openMeasureDetail(recent[idx]); });
   });
 }
 
@@ -543,11 +605,11 @@ function renderMesures(){
   const sorted=[...AppState.measures].sort((a,b)=>b.date-a.date);
   list.innerHTML=sorted.map(m=>measureCardHTML(m)).join('');
   list.querySelectorAll('.card').forEach((el,idx)=>{
-    el.addEventListener('click',()=>openMeasureDetail(sorted[idx]));
+    el.addEventListener('click',async()=>await openMeasureDetail(sorted[idx]));
   });
 }
 
-function openMeasureDetail(m){
+async function openMeasureDetail(m){
   AppState.currentMeasure=m;
 
   function esc(v){
@@ -569,8 +631,24 @@ function openMeasureDetail(m){
         ||siteNames.find(function(n){return norm(n).includes(t)||t.includes(norm(n));})||'';
     }catch(e){ return ''; }
   }
-  var vA=m.manualOrigine||best(m.origine)||'';
-  var vB=m.manualExtremite||best(m.extremite)||'';
+
+  // Pré-remplissage : valeur déjà confirmée sur CETTE mesure > alias global
+  // (déjà confirmé sur une AUTRE mesure, même fichier ou non) > correspondance
+  // approximative avec les sites connus.
+  var aliasA=null, aliasB=null;
+  try{
+    if(m.source==='xlsx'){
+      var pair=await getPairAlias(m.cable||m.name);
+      if(pair){ aliasA=pair.origine; aliasB=pair.extremite; }
+    } else {
+      aliasA = m.origine ? await getAlias(m.origine) : null;
+      aliasB = m.extremite ? await getAlias(m.extremite) : null;
+    }
+  }catch(e){ console.error('alias lookup error',e); }
+
+  var vA=m.manualOrigine||aliasA||best(m.origine)||'';
+  var vB=m.manualExtremite||aliasB||best(m.extremite)||'';
+  var preloadedFromAlias = !m.manualOrigine && !!aliasA;
 
   function badge(val){
     if(!val) return '';
@@ -598,6 +676,7 @@ function openMeasureDetail(m){
     itinHtml=''
       +'<h2>Itin&#233;raire</h2>'
       +'<datalist id="slCorr">'+opts+'</datalist>'
+      +(preloadedFromAlias ? '<p class="sub" style="margin-bottom:8px;color:var(--fiber);">&#128190; Origine/Extr&#233;mit&#233; pr&#233;-remplies depuis une mesure pr&#233;c&#233;dente (m&#234;me texte d&#233;tect&#233;).</p>' : '')
       +'<div class="card">'
         +'<div style="margin-bottom:10px;">'
           +'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
@@ -1048,6 +1127,19 @@ async function saveEndpoints(){
 
   rec.manualOrigine=a||null; rec.manualExtremite=b||null;
   await dbUpdate(rec);
+
+  // Mémorisation globale (alias) : réutilisée automatiquement pour TOUTE
+  // future mesure (PDF ou Excel) mentionnant le même texte brut.
+  if(a && b){
+    if(m.source==='xlsx'){
+      // Excel : pas d'origine/extrémité brutes séparées → alias par câble
+      const label=m.cable||m.name;
+      await setPairAlias(label,a,b);
+    } else {
+      if(m.origine) await setAlias(m.origine,a);
+      if(m.extremite) await setAlias(m.extremite,b);
+    }
+  }
 
   // Partage automatique : même câble (même PDF, même origine/extrémité d'origine)
   // → toutes les autres fibres de ce câble reçoivent la même corrélation,
