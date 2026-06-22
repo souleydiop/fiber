@@ -424,8 +424,15 @@ function parseKML(text, sourceName, sourceType){
   const sections=[], points=[];
   for(let i=0;i<placemarks.length;i++){
     const pm=placemarks[i];
-    const nameEl = pm.getElementsByTagName('name')[0];
-    const name = nameEl ? nameEl.textContent.trim() : '(sans nom)';
+    // Le nom direct du Placemark — on prend le premier <name> enfant DIRECT
+    // (pas les <name> imbriqués dans <ExtendedData> ou <description>)
+    let name='(sans nom)';
+    for(let c=0;c<pm.childNodes.length;c++){
+      if(pm.childNodes[c].nodeName==='name'){
+        name=pm.childNodes[c].textContent.trim();
+        break;
+      }
+    }
     const line = pm.getElementsByTagName('LineString')[0];
     const point = pm.getElementsByTagName('Point')[0];
 
