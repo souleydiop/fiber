@@ -81,14 +81,13 @@ function base64ToArrayBuffer(b64){
 }
 
 /* ---------------- INDEXEDDB ---------------- */
-const DB_NAME='ospmanager_db', DB_VER=2, STORE='files', ALIAS_STORE='aliases';
+const DB_NAME='ospmanager_db', DB_VER=1, STORE='files';
 function openDB(){
   return new Promise((resolve,reject)=>{
     const req=indexedDB.open(DB_NAME,DB_VER);
     req.onupgradeneeded=e=>{
       const db=e.target.result;
       if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:'id',autoIncrement:true});
-      if(!db.objectStoreNames.contains(ALIAS_STORE)) db.createObjectStore(ALIAS_STORE,{keyPath:'key'});
     };
     req.onsuccess=e=>resolve(e.target.result);
     req.onerror=e=>reject(e);
@@ -129,67 +128,6 @@ async function dbUpdate(rec){
     req.onsuccess=()=>resolve();
     req.onerror=e=>reject(e);
   });
-}
-
-/* ---------------- ALIAS DE NOMS (mémoire persistante Origine/Extrémité) ----------------
-   Dès qu'une correspondance "texte brut PDF/Excel" → "site confirmé" est
-   validée une fois (bouton 💾), elle est mémorisée ici et réutilisée
-   automatiquement pour TOUTE future mesure (PDF ou Excel) mentionnant le
-   même texte — plus besoin de la ressaisir à chaque nouveau fichier.
-   Deux types de clés :
-     - alias simple : norm(texte brut) → nom de site (cas PDF, Origine et
-       Extrémité détectées séparément)
-     - alias de paire : "PAIR:"+norm(label câble) → {origine,extremite}
-       (cas Excel, où SECTION OPTIQUE ne peut pas être coupé en deux de
-       façon fiable, donc on retient directement le couple confirmé)
-*/
-async function getAlias(rawText){
-  if(!rawText) return null;
-  try{
-    const db=await openDB();
-    return await new Promise((resolve)=>{
-      const tx=db.transaction(ALIAS_STORE,'readonly');
-      const req=tx.objectStore(ALIAS_STORE).get(norm(rawText));
-      req.onsuccess=()=>resolve(req.result?req.result.value:null);
-      req.onerror=()=>resolve(null);
-    });
-  }catch(e){ console.error('getAlias error',e); return null; }
-}
-async function setAlias(rawText,siteName){
-  if(!rawText||!siteName||norm(rawText)===norm(siteName)) return;
-  try{
-    const db=await openDB();
-    await new Promise((resolve,reject)=>{
-      const tx=db.transaction(ALIAS_STORE,'readwrite');
-      tx.objectStore(ALIAS_STORE).put({key:norm(rawText), value:siteName, updatedAt:Date.now()});
-      tx.oncomplete=()=>resolve();
-      tx.onerror=e=>reject(e);
-    });
-  }catch(e){ console.error('setAlias error',e); }
-}
-async function getPairAlias(label){
-  if(!label) return null;
-  try{
-    const db=await openDB();
-    return await new Promise((resolve)=>{
-      const tx=db.transaction(ALIAS_STORE,'readonly');
-      const req=tx.objectStore(ALIAS_STORE).get('PAIR:'+norm(label));
-      req.onsuccess=()=>resolve(req.result?req.result.value:null);
-      req.onerror=()=>resolve(null);
-    });
-  }catch(e){ console.error('getPairAlias error',e); return null; }
-}
-async function setPairAlias(label,origine,extremite){
-  if(!label||!origine||!extremite) return;
-  try{
-    const db=await openDB();
-    await new Promise((resolve,reject)=>{
-      const tx=db.transaction(ALIAS_STORE,'readwrite');
-      tx.objectStore(ALIAS_STORE).put({key:'PAIR:'+norm(label), value:{origine,extremite}, updatedAt:Date.now()});
-      tx.oncomplete=()=>resolve();
-      tx.onerror=e=>reject(e);
-    });
-  }catch(e){ console.error('setPairAlias error',e); }
 }
 
 /* ---------------- PARSERS ---------------- */
@@ -422,21 +360,43 @@ function parseKML(text, sourceName, sourceType){
   const doc = new DOMParser().parseFromString(text,'text/xml');
   const placemarks = doc.getElementsByTagName('Placemark');
   const sections=[], points=[];
+
+  /* ── Parse description KEY = VALUE (format U900 / KML Sonatel) ──────────
+     Les valeurs sont séparées par &#x0A; (saut de ligne encodé en HTML).   */
+  function parseDesc(pm){
+    const descEl = pm.getElementsByTagName('description')[0];
+    if(!descEl) return {};
+    const meta = {};
+    (descEl.textContent||'')
+      .replace(/&#x0A;/gi,'\n').replace(/&#xA;/gi,'\n')
+      .split('\n').forEach(line=>{
+        const idx=line.indexOf('=');
+        if(idx>0){ const k=line.slice(0,idx).trim(); const v=line.slice(idx+1).trim(); if(k) meta[k]=v; }
+      });
+    return meta;
+  }
+
+  /* Certains KML (dont U900) utilisent <n> au lieu de <name> — on supporte les deux. */
+  function getName(pm){
+    const el = pm.getElementsByTagName('name')[0] || pm.getElementsByTagName('n')[0];
+    return el ? el.textContent.trim() : '(sans nom)';
+  }
+
+  /* Déduplication : même BTS = 3 Points identiques (1 par secteur).
+     On déduplique par coordonnées arrondies à 5 décimales (≈ 1 m). */
+  const seenCoords = new Set();
+
   for(let i=0;i<placemarks.length;i++){
     const pm=placemarks[i];
-    // Le nom direct du Placemark — on prend le premier <name> enfant DIRECT
-    // (pas les <name> imbriqués dans <ExtendedData> ou <description>)
-    let name='(sans nom)';
-    for(let c=0;c<pm.childNodes.length;c++){
-      if(pm.childNodes[c].nodeName==='name'){
-        name=pm.childNodes[c].textContent.trim();
-        break;
-      }
-    }
-    const line = pm.getElementsByTagName('LineString')[0];
-    const point = pm.getElementsByTagName('Point')[0];
+    const name = getName(pm);
+    const styleUrlEl = pm.getElementsByTagName('styleUrl')[0];
+    const styleUrl = styleUrlEl ? styleUrlEl.textContent.trim() : '';
+    const line    = pm.getElementsByTagName('LineString')[0];
+    const point   = pm.getElementsByTagName('Point')[0];
+    const polygon = pm.getElementsByTagName('Polygon')[0];
 
     if(line){
+      /* ── LineString → section fibre ───────────────────────────────────── */
       const coordEl = line.getElementsByTagName('coordinates')[0];
       if(!coordEl) continue;
       const coords = coordEl.textContent.trim().split(/\s+/).filter(Boolean).map(c=>{
@@ -454,17 +414,49 @@ function parseKML(text, sourceName, sourceType){
         type = parts.slice(tIdx).join('-') + (isFiber?'(FIBER)':'');
       }
       sections.push({id:sourceName+'_S'+sections.length, name, endA, endB, type, coords, length:len, source:sourceName});
+
     } else if(point){
+      /* ── Point → site BTS ou nœud fibre ──────────────────────────────── */
       const coordEl = point.getElementsByTagName('coordinates')[0];
       if(!coordEl) continue;
       const parts = coordEl.textContent.trim().split(',');
       const lon=+parts[0], lat=+parts[1];
       if(isNaN(lat)||isNaN(lon)) continue;
+
+      /* Déduplication coordonnées */
+      const coordKey = lat.toFixed(5)+','+lon.toFixed(5);
+      if(seenCoords.has(coordKey)) continue;
+      seenCoords.add(coordKey);
+
+      /* Catégorie : styleUrl > sourceType > heuristique nom
+         '#Site Style' est le marqueur universel BTS dans les KML U900/2G/3G/4G. */
       let category='other';
-      if(sourceType==='bts') category='bts';
+      if(styleUrl==='#Site Style' || sourceType==='bts') category='bts';
       else if(/\sJ\d+$/.test(name)) category='joint';
       else if(/_[A-Z]_\d+$/.test(name)) category='chamber';
+
       points.push({id:sourceName+'_P'+points.length, name, lat, lon, category, source:sourceName});
+
+    } else if(polygon){
+      /* ── Polygon → secteur BTS ────────────────────────────────────────
+         Les KML de couverture radio (U900, LTE…) ont un Polygon par secteur.
+         Le nom du site et ses coordonnées exactes sont dans la <description>.
+         On extrait le BTS et on l'ajoute UNE SEULE FOIS (dédup par coords). */
+      const meta = parseDesc(pm);
+      const btsLat = parseFloat(meta['LATITUDE']);
+      const btsLon = parseFloat(meta['LONGITUDE']);
+      const siteName = meta['NOM SITE'] || meta['NOM_SITE'] || name;
+      if(!isNaN(btsLat) && !isNaN(btsLon)){
+        const coordKey = btsLat.toFixed(5)+','+btsLon.toFixed(5);
+        if(!seenCoords.has(coordKey)){
+          seenCoords.add(coordKey);
+          points.push({
+            id:sourceName+'_P'+points.length,
+            name:siteName, lat:btsLat, lon:btsLon,
+            category:'bts', source:sourceName
+          });
+        }
+      }
     }
   }
   return {sections, points};
@@ -505,7 +497,7 @@ async function handleFiles(fileList){
         }
       } else if(ext==='kml' || ext==='kmz'){
         let text;
-        const sourceType = /site|bts/i.test(file.name) ? 'bts' : 'fiber';
+        const sourceType = /site|bts|u900|lte|2g|3g|4g|coverage|sector|couverture/i.test(file.name) ? 'bts' : 'fiber';
         if(ext==='kmz'){
           const buf=await file.arrayBuffer();
           const zip=await JSZip.loadAsync(buf);
@@ -586,7 +578,7 @@ function renderAccueil(){
   const recent=[...AppState.measures].sort((a,b)=>b.date-a.date).slice(0,5);
   list.innerHTML=recent.map(m=>measureCardHTML(m)).join('');
   list.querySelectorAll('.card').forEach((el,idx)=>{
-    el.addEventListener('click',async()=>{ switchView('mesures'); await openMeasureDetail(recent[idx]); });
+    el.addEventListener('click',()=>{ switchView('mesures'); openMeasureDetail(recent[idx]); });
   });
 }
 
@@ -612,11 +604,11 @@ function renderMesures(){
   const sorted=[...AppState.measures].sort((a,b)=>b.date-a.date);
   list.innerHTML=sorted.map(m=>measureCardHTML(m)).join('');
   list.querySelectorAll('.card').forEach((el,idx)=>{
-    el.addEventListener('click',async()=>await openMeasureDetail(sorted[idx]));
+    el.addEventListener('click',()=>openMeasureDetail(sorted[idx]));
   });
 }
 
-async function openMeasureDetail(m){
+function openMeasureDetail(m){
   AppState.currentMeasure=m;
 
   function esc(v){
@@ -638,24 +630,8 @@ async function openMeasureDetail(m){
         ||siteNames.find(function(n){return norm(n).includes(t)||t.includes(norm(n));})||'';
     }catch(e){ return ''; }
   }
-
-  // Pré-remplissage : valeur déjà confirmée sur CETTE mesure > alias global
-  // (déjà confirmé sur une AUTRE mesure, même fichier ou non) > correspondance
-  // approximative avec les sites connus.
-  var aliasA=null, aliasB=null;
-  try{
-    if(m.source==='xlsx'){
-      var pair=await getPairAlias(m.cable||m.name);
-      if(pair){ aliasA=pair.origine; aliasB=pair.extremite; }
-    } else {
-      aliasA = m.origine ? await getAlias(m.origine) : null;
-      aliasB = m.extremite ? await getAlias(m.extremite) : null;
-    }
-  }catch(e){ console.error('alias lookup error',e); }
-
-  var vA=m.manualOrigine||aliasA||best(m.origine)||'';
-  var vB=m.manualExtremite||aliasB||best(m.extremite)||'';
-  var preloadedFromAlias = !m.manualOrigine && !!aliasA;
+  var vA=m.manualOrigine||best(m.origine)||'';
+  var vB=m.manualExtremite||best(m.extremite)||'';
 
   function badge(val){
     if(!val) return '';
@@ -683,7 +659,6 @@ async function openMeasureDetail(m){
     itinHtml=''
       +'<h2>Itin&#233;raire</h2>'
       +'<datalist id="slCorr">'+opts+'</datalist>'
-      +(preloadedFromAlias ? '<p class="sub" style="margin-bottom:8px;color:var(--fiber);">&#128190; Origine/Extr&#233;mit&#233; pr&#233;-remplies depuis une mesure pr&#233;c&#233;dente (m&#234;me texte d&#233;tect&#233;).</p>' : '')
       +'<div class="card">'
         +'<div style="margin-bottom:10px;">'
           +'<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'
@@ -1134,19 +1109,6 @@ async function saveEndpoints(){
 
   rec.manualOrigine=a||null; rec.manualExtremite=b||null;
   await dbUpdate(rec);
-
-  // Mémorisation globale (alias) : réutilisée automatiquement pour TOUTE
-  // future mesure (PDF ou Excel) mentionnant le même texte brut.
-  if(a && b){
-    if(m.source==='xlsx'){
-      // Excel : pas d'origine/extrémité brutes séparées → alias par câble
-      const label=m.cable||m.name;
-      await setPairAlias(label,a,b);
-    } else {
-      if(m.origine) await setAlias(m.origine,a);
-      if(m.extremite) await setAlias(m.extremite,b);
-    }
-  }
 
   // Partage automatique : même câble (même PDF, même origine/extrémité d'origine)
   // → toutes les autres fibres de ce câble reçoivent la même corrélation,
