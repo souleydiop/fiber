@@ -132,9 +132,120 @@ async function dbUpdate(rec){
 
 /* ---------------- PARSERS ---------------- */
 
+/* ---- Utilitaire : parse un nombre français (virgule décimale, espace milliers) ---- */
+function parseFrNum(s){
+  if(!s||s==='---') return null;
+  const v=parseFloat(s.replace(/>/g,'').replace(/\s+/g,'').replace(',','.'));
+  return isNaN(v)?null:v;
+}
+
+/* ---- Parser EXFO : métadonnées page 1 (ID câble, Emplacements, Résultats) ---- */
+function parseEXFOMeta(text){
+  function get(re){ const m=text.match(re); return m?m[1].trim():null; }
+  const cable=get(/ID du c[aâ]ble\s*:\s*(\S+)/);
+  const fibre=get(/ID de la fibre\s*:\s*(\S+)/);
+  let origine=null, extremite=null;
+  // Texte joint : "Emplacement A Emplacement B Emplacement ORIG DEST Opérateur"
+  const em=text.match(/Emplacement\s+A\s+Emplacement\s+B\s+Emplacement\s+(\S+)\s+(.*?)\s+Op[eé]rateur/i);
+  if(em){ origine=em[1]; extremite=em[2].trim(); }
+  const finFibre=parseFrNum(get(/Longueur de la section\s*:\s*([\d\s]+,\d+)\s*m/));
+  const bilanTotal=parseFrNum(get(/Perte de la section\s*:\s*([\d,]+)\s*dB/));
+  const orl=parseFrNum(get(/ORL de la section\s*:\s*<?(-?[\d,]+)\s*dB/));
+  return {cable,fibre,origine,extremite,finFibre,bilanTotal,orl,hasMeta:!!(cable||origine||finFibre)};
+}
+
+/* ---- Parser EXFO : tableau des événements par positions x/y (page 2+) ---- */
+function parseEXFOEvents(content){
+  const hdrKw=['Nº','N°','Pos./Long.','Perte','Réflectance','Atténuation','Cumulé','Type'];
+  const items=content.items.filter(i=>i.str.trim()!=='').map(i=>({
+    str:i.str.trim(), x:i.transform[4], y:i.transform[5]
+  }));
+  // Trouver les items correspondant aux en-têtes de colonnes
+  const cands=items.filter(i=>hdrKw.includes(i.str)||i.str==='N\u00ba'||i.str==='N\u00b0');
+  if(cands.length<3) return [];
+  // Regrouper par Y pour trouver la ligne d'en-tête
+  const yG={};
+  cands.forEach(c=>{
+    const k=Object.keys(yG).find(ky=>Math.abs(+ky-c.y)<4)||String(c.y);
+    (yG[k]=yG[k]||[]).push(c);
+  });
+  let bestG=[];
+  Object.values(yG).forEach(g=>{ if(g.length>bestG.length) bestG=g; });
+  if(bestG.length<3) return [];
+  const headerY=bestG[0].y;
+  const colX={};
+  bestG.forEach(h=>{ colX[h.str]=h.x; });
+  // Normaliser Nº (ordinal indicator vs degree sign)
+  if(!colX['Nº']&&colX['N°']) colX['Nº']=colX['N°'];
+  if(!colX['Nº']&&colX['N\u00ba']) colX['Nº']=colX['N\u00ba'];
+  if(!colX['Nº']&&colX['N\u00b0']) colX['Nº']=colX['N\u00b0'];
+  // Items sous l'en-tête (données)
+  const skip=new Set(['(m)','(dB)','(dB/km)']);
+  const below=items.filter(i=>i.y<headerY-4&&!skip.has(i.str));
+  const rowMap={};
+  below.forEach(it=>{
+    const k=Object.keys(rowMap).find(ky=>Math.abs(+ky-it.y)<2.5)||String(it.y);
+    (rowMap[k]=rowMap[k]||[]).push(it);
+  });
+  const colKeys=Object.keys(colX);
+  const evts=[];
+  Object.keys(rowMap).map(Number).sort((a,b)=>b-a).forEach(y=>{
+    const ri=rowMap[String(y)]||[];
+    const a={};
+    ri.forEach(it=>{
+      let best=null, bestD=Infinity;
+      colKeys.forEach(c=>{ const d=Math.abs(it.x-colX[c]); if(d<bestD){bestD=d;best=c;} });
+      // Tolérance 40pt (colonnes EXFO sont plus larges que Viavi)
+      if(bestD<40) a[best]=a[best]?a[best]+' '+it.str:it.str;
+    });
+    // Seulement les lignes avec un N° numérique (exclut les lignes "Section")
+    const ns=(a['Nº']||'').trim();
+    if(!/^\d+$/.test(ns)) return;
+    evts.push({
+      num:parseInt(ns,10),
+      distance:parseFrNum(a['Pos./Long.']),
+      affaib:parseFrNum(a['Perte']),
+      reflect:parseFrNum(a['Réflectance']),
+      pente:parseFrNum(a['Atténuation']),
+      section:null,
+      bilan:parseFrNum(a['Cumulé'])
+    });
+  });
+  return evts.sort((a,b)=>a.num-b.num);
+}
+
+/* ---- Fusion pages EXFO : 1 fibre = page meta + page événements (2-3 pages/fibre) ---- */
+function mergeEXFOPages(pages){
+  const reports=[];
+  let cur=null;
+  pages.forEach(p=>{
+    if(p.hasMeta){
+      cur={...p, events:p.events||[]};
+      reports.push(cur);
+    } else if(cur&&(p.events||[]).length){
+      cur.events=[...cur.events,...p.events];
+    }
+  });
+  return reports.length?reports:pages.filter(p=>(p.events||[]).length>0);
+}
+
 // Extrait les données d'UNE page (un "content" pdf.js déjà récupéré).
 function parsePDFPage(content){
   const text = content.items.map(i=>i.str).join(' ').replace(/\s+/g,' ');
+
+  // ---- Détection format EXFO (ID du câble / Emplacement A+B / Tableau des événements) ----
+  if(/ID du c[aâ]ble|Emplacement\s+A\s+Emplacement\s+B|Tableau des [eé]v[eé]nements/.test(text)){
+    const meta=parseEXFOMeta(text);
+    const events=parseEXFOEvents(content);
+    return {
+      cable:meta.cable, fibre:meta.extremite||meta.fibre,
+      origine:meta.origine, extremite:meta.extremite,
+      laser:null, bilanTotal:meta.bilanTotal, orl:meta.orl,
+      finFibre:meta.finFibre, nbEvt:events.length||null,
+      events, rawText:text, isEXFO:true,
+      hasMeta:meta.hasMeta, hasEvents:events.length>0
+    };
+  }
 
   const get=(re)=>{ const m=text.match(re); return m? m[1].trim() : null; };
   const cable     = get(/Nom Câble\s*:\s*(.*?)\s*Nom Fibre/);
@@ -213,11 +324,13 @@ async function parsePDF(arrayBuffer){
       const content = await page.getTextContent();
       const parsed = parsePDFPage(content);
       // Ignore les pages vides/non-OTDR (pas de câble ni de fibre détecté)
-      if(parsed.cable || parsed.fibre || parsed.events.length) pages.push(parsed);
+      if(parsed.cable || parsed.fibre || parsed.isEXFO || parsed.events.length) pages.push(parsed);
     }catch(e){
       console.error('Erreur parsing page '+p+':',e);
     }
   }
+  // EXFO : fusionner les pages par fibre (page meta + page événements)
+  if(pages.length && pages.some(p=>p.isEXFO)) return mergeEXFOPages(pages);
   return pages;
 }
 
@@ -482,12 +595,17 @@ async function handleFiles(fileList){
         } else {
           // Clé de câble partagée : même PDF + même couple origine/extrémité
           // → toutes les fibres de ce câble partageront la même corrélation.
-          const cableKey=file.name+'|'+(pages[0].origine||'')+'|'+(pages[0].extremite||'');
+          const isEXFOFile=pages.some(pg=>pg.isEXFO);
+          const baseCableKey=file.name+'|'+(pages[0].origine||'')+'|'+(pages[0].extremite||'');
           for(let p=0;p<pages.length;p++){
             const parsed=pages[p];
             // Nom distinct par fibre pour la liste Mesures
             const label = parsed.fibre ? ('Fibre '+parsed.fibre) : ('page '+(p+1));
             const name = pages.length>1 ? file.name+' — '+label : file.name;
+            // EXFO : chaque fibre a sa propre paire origine/extremite
+            const cableKey=isEXFOFile
+              ? file.name+'|'+(parsed.origine||'')+'|'+(parsed.extremite||'')
+              : baseCableKey;
             await dbAdd({
               name, ext, date:Date.now(), size:file.size, parsed,
               dataBase64: p===0 ? base64 : undefined, // évite de dupliquer le PDF N fois
