@@ -519,6 +519,53 @@ function toggleDistanceProbe(){
   if(!visible) document.getElementById('probeOrigine').focus();
 }
 
+function _updateProbeWpLabel(){
+  const n=(AppState.probeWaypoints||[]).length;
+  const el=document.getElementById('probeWpCount');
+  if(el) el.textContent=n?'📍 '+n+' point(s) de passage':'Aucun point de passage';
+}
+
+function openProbeWaypointEditor(){
+  const oName=(document.getElementById('probeOrigine').value||'').trim();
+  const dName=(document.getElementById('probeExtremite').value||'').trim();
+  if(!oName||!dName){ toast('Renseigne Origine et Extrémité d\'abord'); return; }
+  const oGPS=_siteGPS(oName), dGPS=_siteGPS(dName);
+  if(!oGPS){ toast('Site introuvable : '+oName); return; }
+  if(!dGPS){ toast('Site introuvable : '+dName); return; }
+  // Fermer le panneau probe et ouvrir l'éditeur Leaflet
+  document.getElementById('distanceProbePanel').style.display='none';
+  AppState.probeWaypoints=AppState.probeWaypoints||[];
+  AppState.waypointMode={
+    oGPS, dGPS,
+    points:[...AppState.probeWaypoints],
+    onFinish:async(pts)=>{
+      AppState.probeWaypoints=pts;
+      _updateProbeWpLabel();
+      document.getElementById('distanceProbePanel').style.display='block';
+      toast(pts.length?pts.length+' point(s) enregistrés — relance le tracé':'Points effacés');
+    }
+  };
+  setTimeout(()=>{
+    if(!AppState.map) initMap();
+    AppState.map.invalidateSize();
+    document.getElementById('waypointBanner').style.display='flex';
+    document.getElementById('waypointCrosshair').style.display='block';
+    document.getElementById('btnWaypointAdd').style.display='flex';
+    attachWaypointMapClick();
+    redrawWaypointEdit();
+    toast('Vise un point puis "+ Ajouter ici"');
+  },200);
+}
+
+/** Cherche les coordonnées GPS d'un site dans AppState.points */
+function _siteGPS(name){
+  if(!name) return null;
+  const q=window.norm(name);
+  const p=AppState.points.find(p=>p.category==='bts'&&window.norm(p.name)===q)
+         ||AppState.points.find(p=>p.category==='bts'&&(window.norm(p.name).includes(q)||q.includes(window.norm(p.name))));
+  return p?[p.lat,p.lon]:null;
+}
+
 async function traceAndLocate(){
   const oName =(document.getElementById('probeOrigine').value||'').trim();
   const dName =(document.getElementById('probeExtremite').value||'').trim();
@@ -537,7 +584,8 @@ async function traceAndLocate(){
   const fakeMeasure={
     origine:oName, extremite:dName,
     manualOrigine:oName, manualExtremite:dName,
-    manualWaypoints:null, events:[], finFibre:distM*2, recId:'_probe'
+    manualWaypoints:(AppState.probeWaypoints&&AppState.probeWaypoints.length)?AppState.probeWaypoints:null,
+    events:[], finFibre:distM*2, recId:'_probe'
   };
 
   let result;
@@ -705,7 +753,11 @@ window.addEventListener('DOMContentLoaded',async()=>{
         </select>
       </div>
     </div>
-    <button class="btn" style="width:100%;" onclick="traceAndLocate()">📍 Tracer et localiser</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding:8px;background:var(--surface2,#2a2a3e);border-radius:8px;">
+      <span id="probeWpCount" class="sub">Aucun point de passage</span>
+      <button class="btn secondary" style="padding:0 12px;height:32px;font-size:12px;" onclick="openProbeWaypointEditor()">📍 Ajuster sur la carte</button>
+    </div>
+    <button class="btn" style="width:100%;" onclick="traceAndLocate()">🗺️ Tracer et localiser</button>
     <div id="probeResult"></div>`;
   document.body.appendChild(panel);
 
@@ -780,3 +832,4 @@ window.detachWaypointMapClick= detachWaypointMapClick;
 window.exitWaypointEditor    = exitWaypointEditor;
 window.toggleDistanceProbe   = toggleDistanceProbe;
 window.traceAndLocate        = traceAndLocate;
+window.openProbeWaypointEditor=openProbeWaypointEditor;

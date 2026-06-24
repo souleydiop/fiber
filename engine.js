@@ -547,6 +547,13 @@ function cancelWaypointEdit(){
 async function finishWaypointEdit(){
   const wm=AppState.waypointMode;
   if(!wm) return;
+  // Callback custom (outil probe — pas de DB)
+  if(wm.onFinish){
+    const pts=wm.points.slice();
+    window.exitWaypointEditor();
+    await wm.onFinish(pts);
+    return;
+  }
   try{
     const recs=await dbGetAll();
     const rec=recs.find(r=>r.id===wm.recId);
