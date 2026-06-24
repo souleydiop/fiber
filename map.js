@@ -337,12 +337,30 @@ function initMap(){
   if(AppState.map) return;
   AppState.map=L.map('map',{preferCanvas:true}).setView([14.6,-15.2],8);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(AppState.map);
-  AppState.layers.sections   =L.layerGroup().addTo(AppState.map);
-  AppState.layers.sites      =L.layerGroup();
-  AppState.layers.joints     =L.layerGroup();
-  AppState.layers.events     =L.layerGroup().addTo(AppState.map);
-  AppState.layers.correlation=L.layerGroup().addTo(AppState.map);
-  AppState.layers.waypointEdit=L.layerGroup().addTo(AppState.map);
+  AppState.layers.sections    = L.layerGroup().addTo(AppState.map);
+  AppState.layers.sites       = L.layerGroup();
+  AppState.layers.joints      = L.layerGroup();
+  AppState.layers.events      = L.layerGroup().addTo(AppState.map);
+  AppState.layers.correlation = L.layerGroup().addTo(AppState.map);
+  AppState.layers.waypointEdit= L.layerGroup().addTo(AppState.map);
+  AppState.layers.probe       = L.layerGroup().addTo(AppState.map);
+
+  // Bouton 📏 flottant sur la carte → ouvre l'outil de localisation par distance
+  const ProbeCtrl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() {
+      const btn = L.DomUtil.create('button');
+      btn.innerHTML = '📏';
+      btn.title = 'Localiser une distance';
+      btn.style.cssText = 'width:36px;height:36px;font-size:18px;cursor:pointer;'
+        + 'background:var(--surface,#1e1e2e);color:var(--text,#fff);'
+        + 'border:1px solid var(--border,#333);border-radius:8px;';
+      L.DomEvent.disableClickPropagation(btn);
+      btn.addEventListener('click', toggleDistanceProbe);
+      return btn;
+    }
+  });
+  new ProbeCtrl().addTo(AppState.map);
 }
 
 function renderMap(){
@@ -465,6 +483,126 @@ function exitWaypointEditor(){
 }
 
 /* ================================================================
+   OUTIL LOCALISATION PAR DISTANCE (standalone — sans fichier)
+   ================================================================ */
+
+/** Retourne le point GPS à une distance distM depuis l'origine d'un résultat de corrélation */
+function getPosAtDistance(result, distM){
+  if(result.chain && result.chain.length){
+    let acc=0;
+    for(const {section,reversed} of result.chain){
+      const coords=reversed?[...section.coords].reverse():section.coords;
+      if(acc+section.length>=distM) return window.interpolateAlong(coords, Math.max(0,distM-acc));
+      acc+=section.length;
+    }
+    const last=result.chain[result.chain.length-1];
+    const c=last.reversed?[...last.section.coords].reverse():last.section.coords;
+    return c[c.length-1];
+  }
+  if(result.routeCoords && result.routeCoords.length>1)
+    return window.interpolateAlong(result.routeCoords, distM);
+  if(result.originGPS && result.destGPS){
+    const total=result.total||window.haversine(result.originGPS[0],result.originGPS[1],result.destGPS[0],result.destGPS[1]);
+    const r=total>0?Math.min(1,Math.max(0,distM/total)):0;
+    return [result.originGPS[0]+(result.destGPS[0]-result.originGPS[0])*r,
+            result.originGPS[1]+(result.destGPS[1]-result.originGPS[1])*r];
+  }
+  return null;
+}
+
+function toggleDistanceProbe(){
+  switchView('carte');
+  const panel=document.getElementById('distanceProbePanel');
+  if(!panel) return;
+  const visible=panel.style.display!=='none';
+  panel.style.display=visible?'none':'block';
+  if(!visible) document.getElementById('probeOrigine').focus();
+}
+
+async function traceAndLocate(){
+  const oName =(document.getElementById('probeOrigine').value||'').trim();
+  const dName =(document.getElementById('probeExtremite').value||'').trim();
+  const raw   =(document.getElementById('probeDist').value||'').trim();
+  const unit  =(document.getElementById('probeUnit').value||'m');
+  const res   = document.getElementById('probeResult');
+
+  if(!oName||!dName||!raw){ res.innerHTML='<p class="sub" style="color:var(--fault);">Remplis les 3 champs.</p>'; return; }
+  let distM=parseFloat(raw);
+  if(isNaN(distM)||distM<0){ res.innerHTML='<p class="sub" style="color:var(--fault);">Distance invalide.</p>'; return; }
+  if(unit==='km') distM*=1000;
+
+  res.innerHTML='<p class="sub">⏳ Calcul de l\'itinéraire…</p>';
+
+  // Mesure virtuelle — aucun fichier requis
+  const fakeMeasure={
+    origine:oName, extremite:dName,
+    manualOrigine:oName, manualExtremite:dName,
+    manualWaypoints:null, events:[], finFibre:distM*2, recId:'_probe'
+  };
+
+  let result;
+  try{
+    result=await window.correlateLinear(fakeMeasure);
+  }catch(e){
+    res.innerHTML=`<p class="sub" style="color:var(--fault);">Erreur : ${e.message}</p>`;
+    return;
+  }
+  if(result.error){
+    res.innerHTML=`<p class="sub" style="color:var(--fault);white-space:pre-line;">${result.error}</p>`;
+    return;
+  }
+
+  const pos=getPosAtDistance(result, distM);
+  if(!pos||!isFinite(pos[0])){
+    res.innerHTML='<p class="sub" style="color:var(--fault);">Impossible de placer le point.</p>';
+    return;
+  }
+
+  // Afficher tracé + marqueur sur la carte
+  if(!AppState.map) initMap();
+  AppState.layers.probe.clearLayers();
+  if(!AppState.layers.probe._map) AppState.layers.probe.addTo(AppState.map);
+
+  // Tracé de la route
+  const routeCoords=result.routeCoords||(result.chain
+    ?result.chain.flatMap(({section,reversed})=>reversed?[...section.coords].reverse():section.coords)
+    :[result.originGPS,result.destGPS]);
+  if(routeCoords&&routeCoords.length>1)
+    L.polyline(routeCoords,{color:'#4f9eff',weight:5,opacity:.8}).addTo(AppState.layers.probe);
+
+  // Marqueurs Origine / Extrémité
+  if(result.originGPS) L.circleMarker(result.originGPS,{radius:8,color:'#4f9eff',fillColor:'#4f9eff',fillOpacity:1,weight:2})
+    .bindPopup('<b>Origine</b><br>'+oName).addTo(AppState.layers.probe);
+  if(result.destGPS)   L.circleMarker(result.destGPS,{radius:8,color:'#ffb454',fillColor:'#ffb454',fillOpacity:1,weight:2})
+    .bindPopup('<b>Extrémité</b><br>'+dName).addTo(AppState.layers.probe);
+
+  // Marqueur de distance d'arrêt
+  L.circleMarker(pos,{radius:11,color:'#ffd454',fillColor:'#ffd454',fillOpacity:1,weight:3})
+    .bindPopup(
+      `<b>📍 ${fmtLen(distM)} depuis ${oName}</b><br>`+
+      `${pos[0].toFixed(5)}, ${pos[1].toFixed(5)}<br>`+
+      `<button class="btn small secondary" style="margin-top:6px;" `+
+      `onclick="navigateTo(${pos[0]},${pos[1]})">🧭 Naviguer</button>`
+    ).addTo(AppState.layers.probe).openPopup();
+
+  // Centrer
+  const allPts=[result.originGPS,result.destGPS,pos].filter(Boolean);
+  AppState.map.fitBounds(L.latLngBounds(allPts),{padding:[50,50]});
+
+  // Résultat texte dans le panneau
+  const modeLabel=result.mode==='chain'?'tracé fibre KML':result.mode==='road'?'itinéraire routier':'ligne directe';
+  res.innerHTML=`
+    <div style="margin-top:10px;padding:10px;background:var(--surface2,#2a2a3e);border-radius:8px;">
+      <div class="row"><span class="sub">Mode</span><strong>${modeLabel}</strong></div>
+      <div class="row"><span class="sub">Longueur totale</span><strong>${fmtLen(result.total)}</strong></div>
+      <div class="row"><span class="sub">Distance d'arrêt</span><strong>${fmtLen(distM)}</strong></div>
+      <div class="row"><span class="sub">Latitude</span><strong>${pos[0].toFixed(6)}</strong></div>
+      <div class="row"><span class="sub">Longitude</span><strong>${pos[1].toFixed(6)}</strong></div>
+      <button class="btn secondary" style="width:100%;margin-top:8px;" onclick="navigateTo(${pos[0]},${pos[1]})">🧭 Naviguer vers ce point</button>
+    </div>`;
+}
+
+/* ================================================================
    NAVIGATION
    ================================================================ */
 function switchView(name){
@@ -526,6 +664,58 @@ function toggleMapSearch(){
    INIT — DOMContentLoaded
    ================================================================ */
 window.addEventListener('DOMContentLoaded',async()=>{
+
+  // ---- Panneau "Localisation par distance" injecté dans le DOM ----
+  const siteOpts=()=>[...new Set(AppState.points.filter(p=>p.category==='bts').map(p=>p.name))].sort()
+    .map(n=>`<option value="${n}">`).join('');
+
+  const panel=document.createElement('div');
+  panel.id='distanceProbePanel';
+  panel.style.cssText='display:none;position:fixed;bottom:60px;left:0;right:0;z-index:1200;'
+    +'background:var(--surface,#1e1e2e);border-top:1px solid var(--border,#333);'
+    +'padding:14px 16px 16px;max-height:80vh;overflow-y:auto;';
+  panel.innerHTML=`
+    <datalist id="probeSiteList"></datalist>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <strong style="font-size:14px;">📏 Localisation par distance</strong>
+      <button onclick="toggleDistanceProbe()" style="background:none;border:none;color:var(--muted,#888);font-size:20px;cursor:pointer;padding:0 4px;">✕</button>
+    </div>
+    <div style="margin-bottom:8px;">
+      <label class="sub" style="display:block;margin-bottom:4px;">Origine</label>
+      <input id="probeOrigine" list="probeSiteList" placeholder="Nom du site A" autocomplete="off"
+        style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;">
+    </div>
+    <div style="margin-bottom:8px;">
+      <label class="sub" style="display:block;margin-bottom:4px;">Extrémité</label>
+      <input id="probeExtremite" list="probeSiteList" placeholder="Nom du site B" autocomplete="off"
+        style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;">
+    </div>
+    <div style="margin-bottom:12px;display:flex;gap:8px;">
+      <div style="flex:1;">
+        <label class="sub" style="display:block;margin-bottom:4px;">Distance d'arrêt</label>
+        <input id="probeDist" type="number" min="0" step="0.001" placeholder="ex: 8500"
+          style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;"
+          onkeydown="if(event.key==='Enter') traceAndLocate();">
+      </div>
+      <div style="width:70px;">
+        <label class="sub" style="display:block;margin-bottom:4px;">Unité</label>
+        <select id="probeUnit" style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 8px;font-size:13px;">
+          <option value="m">m</option>
+          <option value="km">km</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn" style="width:100%;" onclick="traceAndLocate()">📍 Tracer et localiser</button>
+    <div id="probeResult"></div>`;
+  document.body.appendChild(panel);
+
+  // Mettre à jour la datalist sites quand le panneau s'ouvre
+  document.getElementById('probeOrigine').addEventListener('focus',()=>{
+    document.getElementById('probeSiteList').innerHTML=siteOpts();
+  });
+  document.getElementById('probeExtremite').addEventListener('focus',()=>{
+    document.getElementById('probeSiteList').innerHTML=siteOpts();
+  });
   document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>switchView(btn.dataset.view)));
   document.getElementById('btnImport').addEventListener('click',()=>document.getElementById('fileInput').click());
   document.getElementById('fileInput').addEventListener('change',e=>{
@@ -588,3 +778,5 @@ window.redrawWaypointEdit    = redrawWaypointEdit;
 window.attachWaypointMapClick= attachWaypointMapClick;
 window.detachWaypointMapClick= detachWaypointMapClick;
 window.exitWaypointEditor    = exitWaypointEditor;
+window.toggleDistanceProbe   = toggleDistanceProbe;
+window.traceAndLocate        = traceAndLocate;
