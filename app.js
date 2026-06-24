@@ -156,14 +156,30 @@ function parseEXFOMeta(text){
 
 /* ---- Parser EXFO : tableau des événements par positions x/y (page 2+) ---- */
 function parseEXFOEvents(content){
-  const hdrKw=['Nº','N°','Pos./Long.','Perte','Réflectance','Atténuation','Cumulé','Type'];
+  /* Les colonnes EXFO sont RIGHT-ALIGNED : le header commence au bord gauche
+     mais les données (petits nombres) se retrouvent très à droite dans la cellule.
+     → On détecte les headers, puis on décale les ancres de ~65% de la largeur
+       de chaque colonne pour pointer vers le bord droit où se trouvent les données.
+     → Seuil 80pt pour couvrir même les petits nombres (ex : "0,0", "456,8"). */
+
   const items=content.items.filter(i=>i.str.trim()!=='').map(i=>({
     str:i.str.trim(), x:i.transform[4], y:i.transform[5]
   }));
-  // Trouver les items correspondant aux en-têtes de colonnes
-  const cands=items.filter(i=>hdrKw.includes(i.str)||i.str==='N\u00ba'||i.str==='N\u00b0');
+
+  /* Détection des headers : correspondance exacte OU préfixe partiel
+     (robustesse face aux variantes d'encodage des caractères accentués). */
+  function matchHeader(s){
+    if(['Type','Perte','Nº','N°','N\u00ba','N\u00b0'].includes(s)) return true;
+    if(s==='Pos./Long.'||s.startsWith('Pos./')) return true;
+    if(s.startsWith('R\u00e9fl')||s.startsWith('Refl')) return true; // Réfl…
+    if(s.startsWith('Att\u00e9')||s.startsWith('Atte')||s.startsWith('Att.')) return true; // Att…
+    if(s.startsWith('Cum')||s==='Cumulé') return true;
+    return false;
+  }
+  const cands=items.filter(i=>matchHeader(i.str));
   if(cands.length<3) return [];
-  // Regrouper par Y pour trouver la ligne d'en-tête
+
+  /* Regrouper par Y → ligne d'en-tête = le groupe le plus fourni */
   const yG={};
   cands.forEach(c=>{
     const k=Object.keys(yG).find(ky=>Math.abs(+ky-c.y)<4)||String(c.y);
@@ -172,14 +188,36 @@ function parseEXFOEvents(content){
   let bestG=[];
   Object.values(yG).forEach(g=>{ if(g.length>bestG.length) bestG=g; });
   if(bestG.length<3) return [];
+
   const headerY=bestG[0].y;
+
+  /* Normaliser les clés de colonnes */
+  function normKey(s){
+    if(s==='N°'||s==='N\u00ba'||s==='N\u00b0') return 'Nº';
+    if(s.startsWith('Pos./')) return 'Pos./Long.';
+    if(s.startsWith('R\u00e9fl')||s.startsWith('Refl')) return 'Réflectance';
+    if(s.startsWith('Att')) return 'Atténuation';
+    if(s.startsWith('Cum')) return 'Cumulé';
+    return s;
+  }
   const colX={};
-  bestG.forEach(h=>{ colX[h.str]=h.x; });
-  // Normaliser Nº (ordinal indicator vs degree sign)
-  if(!colX['Nº']&&colX['N°']) colX['Nº']=colX['N°'];
-  if(!colX['Nº']&&colX['N\u00ba']) colX['Nº']=colX['N\u00ba'];
-  if(!colX['Nº']&&colX['N\u00b0']) colX['Nº']=colX['N\u00b0'];
-  // Items sous l'en-tête (données)
+  bestG.forEach(h=>{ colX[normKey(h.str)]=h.x; });
+
+  /* Décalage des ancres vers la droite (données right-aligned)
+     Ordre canonique des colonnes → calcul des largeurs inter-colonnes */
+  const COL_ORDER=['Type','Nº','Pos./Long.','Perte','Réflectance','Atténuation','Cumulé'];
+  const present=COL_ORDER.filter(c=>colX[c]!==undefined);
+  for(let i=0;i<present.length;i++){
+    if(present[i]==='Type') continue; // texte left-aligned, pas d'ajustement
+    if(i<present.length-1){
+      const w=colX[present[i+1]]-colX[present[i]];
+      if(w>0) colX[present[i]]+=Math.round(w*0.65);
+    } else {
+      colX[present[i]]+=40; // dernière colonne : estimation fixe
+    }
+  }
+
+  /* Items sous l'en-tête */
   const skip=new Set(['(m)','(dB)','(dB/km)']);
   const below=items.filter(i=>i.y<headerY-4&&!skip.has(i.str));
   const rowMap={};
@@ -187,16 +225,25 @@ function parseEXFOEvents(content){
     const k=Object.keys(rowMap).find(ky=>Math.abs(+ky-it.y)<2.5)||String(it.y);
     (rowMap[k]=rowMap[k]||[]).push(it);
   });
-  const colKeys=Object.keys(colX);
+
+  // Attribution par plages (midpoints entre colonnes adjacentes).
+  // Robuste quel que soit l'alignement (gauche/droite/centré) :
+  // même un petit nombre right-aligned ("0,0", "-14,8") tombe dans la bonne plage.
+  const sortedCols=Object.keys(colX).sort((a,b)=>colX[a]-colX[b]);
+  const colRanges={};
+  sortedCols.forEach((col,idx)=>{
+    const left =idx===0                    ? -Infinity : (colX[sortedCols[idx-1]]+colX[col])/2;
+    const right=idx===sortedCols.length-1 ?  Infinity : (colX[col]+colX[sortedCols[idx+1]])/2;
+    colRanges[col]=[left,right];
+  });
   const evts=[];
-  Object.keys(rowMap).map(Number).sort((a,b)=>b-a).forEach(y=>{
-    const ri=rowMap[String(y)]||[];
+
+  Object.keys(rowMap).sort((a,b)=>+b-(+a)).forEach(k=>{
+    const ri=rowMap[k]||[];
     const a={};
     ri.forEach(it=>{
-      let best=null, bestD=Infinity;
-      colKeys.forEach(c=>{ const d=Math.abs(it.x-colX[c]); if(d<bestD){bestD=d;best=c;} });
-      // Tolérance 40pt (colonnes EXFO sont plus larges que Viavi)
-      if(bestD<40) a[best]=a[best]?a[best]+' '+it.str:it.str;
+      const col=sortedCols.find(c=>it.x>=colRanges[c][0]&&it.x<colRanges[c][1]);
+      if(col) a[col]=a[col]?a[col]+' '+it.str:it.str;
     });
     // Seulement les lignes avec un N° numérique (exclut les lignes "Section")
     const ns=(a['Nº']||'').trim();
