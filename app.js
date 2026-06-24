@@ -296,7 +296,9 @@ function parsePDFPage(content){
 
   const get=(re)=>{ const m=text.match(re); return m? m[1].trim() : null; };
   const cable     = get(/Nom Câble\s*:\s*(.*?)\s*Nom Fibre/);
-  const fibre     = get(/Nom Fibre\s*:\s*(\S+)/);
+  // Fibre peut contenir des espaces ("port 2") → capturer jusqu'au prochain label
+  const fibre     = get(/Nom Fibre\s*:\s*(.*?)\s*(?:\bOrigine\b|\bR[eé]f\b|\bID\s+du\s+c[aâ]ble\b)/i)
+                 || get(/Nom Fibre\s*:\s*(\S+)/);
   const origine   = get(/Origine\s*:\s*(.*?)\s*Extrémité/);
   const extremite = get(/Extrémité\s*:\s*(.*?)\s*(?:Réf|Opérateur|$)/);
 
@@ -332,25 +334,34 @@ function parsePDFPage(content){
       (rows[k]=rows[k]||[]).push(it);
     });
 
-    // 3) trier les lignes du haut vers le bas (y décroissant) et assigner chaque item
-    //    à la colonne dont l'ancre x est la plus proche
-    const colKeys = Object.keys(colX);
+    // 3) Attribution par PLAGES (midpoints entre colonnes adjacentes).
+    //    Plus robuste que la distance pure : gère les valeurs right-alignées
+    //    et le préfixe "~" (valeur approchée) des connecteurs Viavi.
+    const sortedCols=Object.keys(colX).sort((a,b)=>colX[a]-colX[b]);
+    const colRanges={};
+    sortedCols.forEach((col,idx)=>{
+      const left =idx===0                    ?-Infinity:(colX[sortedCols[idx-1]]+colX[col])/2;
+      const right=idx===sortedCols.length-1 ? Infinity:(colX[col]+colX[sortedCols[idx+1]])/2;
+      colRanges[col]=[left,right];
+    });
+    // parse nombre Viavi : supprime le préfixe "~" (valeur approchée) et les espaces
+    const pn=s=>{ if(!s) return null; const v=parseFloat(s.replace(/[~\s]+/g,'')); return isNaN(v)?null:v; };
     Object.keys(rows).map(Number).sort((a,b)=>b-a).forEach(y=>{
       const row={};
       rows[y].forEach(it=>{
-        let best=null, bestD=Infinity;
-        colKeys.forEach(c=>{ const d=Math.abs(it.x-colX[c]); if(d<bestD){bestD=d; best=c;} });
-        if(bestD<20) row[best]=it.str;
+        const col=sortedCols.find(c=>it.x>=colRanges[c][0]&&it.x<colRanges[c][1]);
+        // Concaténer si plusieurs items dans la même colonne (ex : "~" puis "8.988")
+        if(col) row[col]=row[col]?row[col]+' '+it.str:it.str;
       });
       if(row['Evt']!==undefined){
         events.push({
-          num: parseInt(row['Evt'],10),
-          distance: row['Distance']!==undefined ? parseFloat(row['Distance']) : null,
-          affaib: row['Affaib.']!==undefined ? parseFloat(row['Affaib.']) : null,
-          reflect: row['Réflect.']!==undefined ? parseFloat(row['Réflect.']) : null,
-          pente: row['Pente']!==undefined ? parseFloat(row['Pente']) : null,
-          section: row['Section']!==undefined ? parseFloat(row['Section']) : null,
-          bilan: row['Bilan']!==undefined ? parseFloat(row['Bilan']) : null,
+          num:      parseInt(row['Evt'],10),
+          distance: pn(row['Distance']),
+          affaib:   pn(row['Affaib.']),
+          reflect:  pn(row['Réflect.']),
+          pente:    pn(row['Pente']),
+          section:  pn(row['Section']),
+          bilan:    pn(row['Bilan']),
         });
       }
     });
