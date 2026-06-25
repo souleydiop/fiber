@@ -335,7 +335,8 @@ function renderHistory(){
    ================================================================ */
 function initMap(){
   if(AppState.map) return;
-  AppState.map=L.map('map',{preferCanvas:true}).setView([14.6,-15.2],8);
+  AppState.map=L.map('map',{preferCanvas:true,zoomControl:false}).setView([14.6,-15.2],8);
+  L.control.zoom({position:'bottomright'}).addTo(AppState.map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(AppState.map);
   AppState.layers.sections    = L.layerGroup().addTo(AppState.map);
   AppState.layers.sites       = L.layerGroup();
