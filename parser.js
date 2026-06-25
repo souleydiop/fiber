@@ -249,7 +249,13 @@ async function parsePDF(arrayBuffer){
     }catch(e){ console.error('Erreur parsing page '+p+':',e); }
   }
   if(pages.length&&pages.some(p=>p.isEXFO)) return mergeEXFOPages(pages);
-  return pages;
+  // Dédupliquer les pages identiques (Viavi SmartOTDR répète chaque fibre 3-4x dans le PDF)
+  const seen=new Set();
+  return pages.filter(p=>{
+    const k=(p.fibre||'')+'|'+(p.cable||'')+'|'+(p.origine||'')+'|'+(p.extremite||'');
+    if(seen.has(k)) return false;
+    seen.add(k); return true;
+  });
 }
 
 /* ================================================================
