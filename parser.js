@@ -184,9 +184,20 @@ function parsePDFPage(content){
   const headerItems=items.filter(i=>COLS.includes(i.str));
   const events=[];
   if(headerItems.length>=4){
-    const headerY=headerItems[0].y;
+    // Regrouper par Y et prendre la ligne qui a le PLUS de colonnes correspondantes.
+    // Évite de confondre la ligne "Résumé" (qui contient aussi Evt, Bilan)
+    // avec la vraie ligne d'en-tête du tableau des événements.
+    const yG={};
+    headerItems.forEach(h=>{
+      const k=Object.keys(yG).find(ky=>Math.abs(+ky-h.y)<2)||String(h.y);
+      (yG[k]=yG[k]||[]).push(h);
+    });
+    let bestG=[];
+    Object.values(yG).forEach(g=>{ if(g.length>bestG.length) bestG=g; });
+    if(bestG.length<3) return {cable,fibre,origine,extremite,laser,bilanTotal,orl,finFibre,nbEvt,events,rawText:text};
+    const headerY=bestG[0].y;
     const colX={};
-    headerItems.forEach(h=>{ if(Math.abs(h.y-headerY)<2) colX[h.str]=h.x; });
+    bestG.forEach(h=>{ colX[h.str]=h.x; });
 
     const dataItems=items.filter(i=>i.y<headerY-2&&!/^(m|dB|dB\/km)$/.test(i.str));
     const rows={};
