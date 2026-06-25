@@ -511,6 +511,20 @@ function getPosAtDistance(result, distM){
   return null;
 }
 
+/** Affiche l'unité auto-détectée pendant la saisie */
+function detectProbeUnit(){
+  const raw=(document.getElementById('probeDist').value||'').trim();
+  const el=document.getElementById('probeUnitDetect');
+  if(!el) return;
+  const v=parseFloat(raw);
+  if(!raw||isNaN(v)||v<=0){ el.textContent=''; return; }
+  if(raw.includes('.')||v<100){
+    el.textContent=`→ ${v} km = ${(v*1000).toFixed(0)} m`;
+  } else {
+    el.textContent=`→ ${v} m`;
+  }
+}
+
 function toggleDistanceProbe(){
   switchView('carte');
   const panel=document.getElementById('distanceProbePanel');
@@ -571,13 +585,13 @@ async function traceAndLocate(){
   const oName =(document.getElementById('probeOrigine').value||'').trim();
   const dName =(document.getElementById('probeExtremite').value||'').trim();
   const raw   =(document.getElementById('probeDist').value||'').trim();
-  const unit  =(document.getElementById('probeUnit').value||'m');
   const res   = document.getElementById('probeResult');
 
   if(!oName||!dName||!raw){ res.innerHTML='<p class="sub" style="color:var(--fault);">Remplis les 3 champs.</p>'; return; }
   let distM=parseFloat(raw);
   if(isNaN(distM)||distM<0){ res.innerHTML='<p class="sub" style="color:var(--fault);">Distance invalide.</p>'; return; }
-  if(unit==='km') distM*=1000;
+  // Auto-détection : décimal OU valeur < 100 → km → convertir en m
+  if(raw.includes('.')||distM<100) distM*=1000;
 
   res.innerHTML='<p class="sub">⏳ Calcul de l\'itinéraire…</p>';
 
@@ -745,20 +759,16 @@ window.addEventListener('DOMContentLoaded',async()=>{
       <input id="probeExtremite" list="probeSiteList" placeholder="Nom du site B" autocomplete="off"
         style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;">
     </div>
-    <div style="margin-bottom:12px;display:flex;gap:8px;">
-      <div style="flex:1;">
-        <label class="sub" style="display:block;margin-bottom:4px;">Distance d'arrêt</label>
-        <input id="probeDist" type="number" min="0" step="0.001" placeholder="ex: 8500"
-          style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;"
-          onkeydown="if(event.key==='Enter') traceAndLocate();">
+    <div style="margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
+        <label class="sub">Distance d'arrêt</label>
+        <span id="probeUnitDetect" style="font-size:11px;color:var(--fiber,#4ad7ff);"></span>
       </div>
-      <div style="width:70px;">
-        <label class="sub" style="display:block;margin-bottom:4px;">Unité</label>
-        <select id="probeUnit" style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 8px;font-size:13px;">
-          <option value="m">m</option>
-          <option value="km">km</option>
-        </select>
-      </div>
+      <input id="probeDist" type="number" min="0" step="any"
+        placeholder="ex: 8500 (m) ou 8.5 (km auto-détecté)"
+        style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;"
+        oninput="detectProbeUnit()"
+        onkeydown="if(event.key==='Enter') traceAndLocate();">
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding:8px;background:var(--surface2,#2a2a3e);border-radius:8px;">
       <span id="probeWpCount" class="sub">Aucun point de passage</span>
@@ -837,6 +847,7 @@ window.redrawWaypointEdit    = redrawWaypointEdit;
 window.attachWaypointMapClick= attachWaypointMapClick;
 window.detachWaypointMapClick= detachWaypointMapClick;
 window.exitWaypointEditor    = exitWaypointEditor;
-window.toggleDistanceProbe   = toggleDistanceProbe;
-window.traceAndLocate        = traceAndLocate;
-window.openProbeWaypointEditor=openProbeWaypointEditor;
+window.toggleDistanceProbe    = toggleDistanceProbe;
+window.traceAndLocate         = traceAndLocate;
+window.openProbeWaypointEditor= openProbeWaypointEditor;
+window.detectProbeUnit        = detectProbeUnit;
