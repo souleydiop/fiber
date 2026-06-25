@@ -658,6 +658,12 @@ function switchView(name){
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+name).classList.add('active');
   document.querySelector(`.tab[data-view="${name}"]`).classList.add('active');
+  // Nettoyer le tracé probe et fermer le panneau dès qu'on quitte la carte
+  if(name!=='carte'){
+    if(AppState.layers&&AppState.layers.probe) AppState.layers.probe.clearLayers();
+    const panel=document.getElementById('distanceProbePanel');
+    if(panel) panel.style.display='none';
+  }
   if(name==='carte') setTimeout(()=>{ initMap(); renderMap(); AppState.map.invalidateSize(); },50);
 }
 function updateHeader(){
