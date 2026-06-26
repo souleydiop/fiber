@@ -87,12 +87,19 @@ function parseEXFOEvents(content){
   const colX={};
   bestG.forEach(h=>{ colX[normKey(h.str)]=h.x; });
 
-  // Détecter unité : premier (m)/(km) par x croissant sous en-tête
-  // → forcément Pos./Long. ; (dB) et (dB/km) ne matchent pas
-  const unitTokens=items
-    .filter(i=>i.y>=headerY-25&&i.y<headerY-1&&(i.str==='(m)'||i.str==='(km)'))
-    .sort((a,b)=>a.x-b.x);
-  const inMeters=unitTokens.length>0&&unitTokens[0].str==='(m)';
+  // Détecter unité depuis Pos./Long. (m) ou Pos./Long. (km)
+  // Cas 1 : unité dans le même item  → extraire depuis bestG
+  // Cas 2 : item séparé (m)/(km) sous l'en-tête → fallback Y-range
+  const posItem=bestG.find(h=>h.str.startsWith('Pos./'));
+  let inMeters=false;
+  if(posItem&&/\(m\)|\(km\)/.test(posItem.str)){
+    inMeters=/\(m\)/.test(posItem.str)&&!/\(km\)/.test(posItem.str);
+  } else {
+    const unitTokens=items
+      .filter(i=>i.y>=headerY-25&&i.y<headerY-1&&(i.str==='(m)'||i.str==='(km)'))
+      .sort((a,b)=>a.x-b.x);
+    inMeters=unitTokens.length>0&&unitTokens[0].str==='(m)';
+  }
 
   const COL_ORDER=['Type','Nº','Pos./Long.','Perte','Réflectance','Atténuation','Cumulé'];
   const present=COL_ORDER.filter(c=>colX[c]!==undefined);
