@@ -87,14 +87,12 @@ function parseEXFOEvents(content){
   const colX={};
   bestG.forEach(h=>{ colX[normKey(h.str)]=h.x; });
 
-  // Détecter l'unité de Pos./Long. : chercher (m) ou (km) sous cette colonne
-  const posColX=colX['Pos./Long.'];
-  const unitNearHeader=items.filter(i=>
-    i.y>=headerY-25&&i.y<headerY-1&&
-    posColX!==undefined&&Math.abs(i.x-posColX)<40&&
-    (i.str==='(m)'||i.str==='(km)')
-  );
-  const inMeters=unitNearHeader.some(i=>i.str==='(m)');
+  // Détecter unité : premier (m)/(km) par x croissant sous en-tête
+  // → forcément Pos./Long. ; (dB) et (dB/km) ne matchent pas
+  const unitTokens=items
+    .filter(i=>i.y>=headerY-25&&i.y<headerY-1&&(i.str==='(m)'||i.str==='(km)'))
+    .sort((a,b)=>a.x-b.x);
+  const inMeters=unitTokens.length>0&&unitTokens[0].str==='(m)';
 
   const COL_ORDER=['Type','Nº','Pos./Long.','Perte','Réflectance','Atténuation','Cumulé'];
   const present=COL_ORDER.filter(c=>colX[c]!==undefined);
