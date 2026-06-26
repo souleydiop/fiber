@@ -39,9 +39,15 @@ function parseEXFOMeta(text){
   let origine=null,extremite=null;
   const em=text.match(/Emplacement\s+A\s+Emplacement\s+B\s+Emplacement\s+(\S+)\s+(.*?)\s+Op[eé]rateur/i);
   if(em){ origine=em[1]; extremite=em[2].trim(); }
-  const finFibre=parseFrNum(get(/Longueur de la section\s*:\s*([\d\s]+,\d+)\s*m/));
-  const bilanTotal=parseFrNum(get(/Perte de la section\s*:\s*([\d,]+)\s*dB/));
-  const orl=parseFrNum(get(/ORL de la section\s*:\s*<?(-?[\d,]+)\s*dB/));
+  // finFibre : format km (11.5447 km) ou m (20 313,9 m → convertir)
+  let finFibre=parseFrNum(get(/Longueur de la section\s*:\s*([\d.]+)\s*km/));
+  if(finFibre===null){
+    const mVal=parseFrNum(get(/Longueur de la section\s*:\s*([\d\s,]+)\s*m(?!\w)/));
+    if(mVal!==null) finFibre=mVal/1000;
+  }
+  // bilanTotal / orl : gérer virgule ET point décimal
+  const bilanTotal=parseFrNum(get(/Perte de la section\s*:\s*([\d,.]+)\s*dB/));
+  const orl=parseFrNum(get(/ORL de la section\s*:\s*<?(-?[\d,.]+)\s*dB/));
   return {cable,fibre,origine,extremite,finFibre,bilanTotal,orl,hasMeta:!!(cable||origine||finFibre)};
 }
 
@@ -70,6 +76,9 @@ function parseEXFOEvents(content){
   if(bestG.length<3) return [];
 
   const headerY=bestG[0].y;
+  // Détecter l'unité : (m) → convertir en km, (km) → garder tel quel
+  const unitNearHeader=items.filter(i=>i.y>=headerY-25&&i.y<headerY-1);
+  const inMeters=unitNearHeader.some(i=>i.str==='(m)');
   function normKey(s){
     if(s==='N°'||s==='N\u00ba'||s==='N\u00b0') return 'Nº';
     if(s.startsWith('Pos./')) return 'Pos./Long.';
@@ -93,7 +102,7 @@ function parseEXFOEvents(content){
     }
   }
 
-  const skip=new Set(['(m)','(dB)','(dB/km)']);
+  const skip=new Set(['(m)','(km)','(dB)','(dB/km)']);
   const below=items.filter(i=>i.y<headerY-4&&!skip.has(i.str));
   const rowMap={};
   below.forEach(it=>{
@@ -118,9 +127,10 @@ function parseEXFOEvents(content){
     });
     const ns=(a['Nº']||'').trim();
     if(!/^\d+$/.test(ns)) return;
+    const rawDist=parseFrNum(a['Pos./Long.']);
     evts.push({
       num:parseInt(ns,10),
-      distance:parseFrNum(a['Pos./Long.']),
+      distance:rawDist!==null&&inMeters ? rawDist/1000 : rawDist,
       affaib:parseFrNum(a['Perte']),
       reflect:parseFrNum(a['Réflectance']),
       pente:parseFrNum(a['Atténuation']),
