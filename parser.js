@@ -76,14 +76,6 @@ function parseEXFOEvents(content){
   if(bestG.length<3) return [];
 
   const headerY=bestG[0].y;
-  // Détecter l'unité de distance uniquement sous la colonne Pos./Long.
-  const posColX=colX['Pos./Long.'];
-  const unitNearHeader=items.filter(i=>
-    i.y>=headerY-25&&i.y<headerY-1&&
-    posColX!==undefined&&Math.abs(i.x-posColX)<40&&
-    (i.str==='(m)'||i.str==='(km)')
-  );
-  const inMeters=unitNearHeader.some(i=>i.str==='(m)');
   function normKey(s){
     if(s==='N°'||s==='N\u00ba'||s==='N\u00b0') return 'Nº';
     if(s.startsWith('Pos./')) return 'Pos./Long.';
@@ -94,6 +86,15 @@ function parseEXFOEvents(content){
   }
   const colX={};
   bestG.forEach(h=>{ colX[normKey(h.str)]=h.x; });
+
+  // Détecter l'unité de Pos./Long. : chercher (m) ou (km) sous cette colonne
+  const posColX=colX['Pos./Long.'];
+  const unitNearHeader=items.filter(i=>
+    i.y>=headerY-25&&i.y<headerY-1&&
+    posColX!==undefined&&Math.abs(i.x-posColX)<40&&
+    (i.str==='(m)'||i.str==='(km)')
+  );
+  const inMeters=unitNearHeader.some(i=>i.str==='(m)');
 
   const COL_ORDER=['Type','Nº','Pos./Long.','Perte','Réflectance','Atténuation','Cumulé'];
   const present=COL_ORDER.filter(c=>colX[c]!==undefined);
