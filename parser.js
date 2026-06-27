@@ -39,9 +39,15 @@ function parseEXFOMeta(text){
   let origine=null,extremite=null;
   const em=text.match(/Emplacement\s+A\s+Emplacement\s+B\s+Emplacement\s+(\S+)\s+(.*?)\s+Op[eé]rateur/i);
   if(em){ origine=em[1]; extremite=em[2].trim(); }
-  const finFibre=parseFrNum(get(/Longueur de la section\s*:\s*([\d\s]+,\d+)\s*m/));
-  const bilanTotal=parseFrNum(get(/Perte de la section\s*:\s*([\d,]+)\s*dB/));
-  const orl=parseFrNum(get(/ORL de la section\s*:\s*<?(-?[\d,]+)\s*dB/));
+  // finFibre : format km (11.5447 km) ou m (20 313,9 m → convertir)
+  let finFibre=parseFrNum(get(/Longueur de la section\s*:\s*([\d.]+)\s*km/));
+  if(finFibre===null){
+    const mVal=parseFrNum(get(/Longueur de la section\s*:\s*([\d\s,]+)\s*m(?!\w)/));
+    if(mVal!==null) finFibre=mVal/1000;
+  }
+  // bilanTotal / orl : gérer virgule ET point décimal
+  const bilanTotal=parseFrNum(get(/Perte de la section\s*:\s*([\d,.]+)\s*dB/));
+  const orl=parseFrNum(get(/ORL de la section\s*:\s*<?(-?[\d,.]+)\s*dB/));
   return {cable,fibre,origine,extremite,finFibre,bilanTotal,orl,hasMeta:!!(cable||origine||finFibre)};
 }
 
@@ -81,6 +87,20 @@ function parseEXFOEvents(content){
   const colX={};
   bestG.forEach(h=>{ colX[normKey(h.str)]=h.x; });
 
+  // Détecter unité depuis Pos./Long. (m) ou Pos./Long. (km)
+  // Cas 1 : unité dans le même item  → extraire depuis bestG
+  // Cas 2 : item séparé (m)/(km) sous l'en-tête → fallback Y-range
+  const posItem=bestG.find(h=>h.str.startsWith('Pos./'));
+  let inMeters=false;
+  if(posItem&&/\(m\)|\(km\)/.test(posItem.str)){
+    inMeters=/\(m\)/.test(posItem.str)&&!/\(km\)/.test(posItem.str);
+  } else {
+    const unitTokens=items
+      .filter(i=>i.y>=headerY-25&&i.y<headerY-1&&(i.str==='(m)'||i.str==='(km)'))
+      .sort((a,b)=>a.x-b.x);
+    inMeters=unitTokens.length>0&&unitTokens[0].str==='(m)';
+  }
+
   const COL_ORDER=['Type','Nº','Pos./Long.','Perte','Réflectance','Atténuation','Cumulé'];
   const present=COL_ORDER.filter(c=>colX[c]!==undefined);
   for(let i=0;i<present.length;i++){
@@ -93,7 +113,7 @@ function parseEXFOEvents(content){
     }
   }
 
-  const skip=new Set(['(m)','(dB)','(dB/km)']);
+  const skip=new Set(['(m)','(km)','(dB)','(dB/km)']);
   const below=items.filter(i=>i.y<headerY-4&&!skip.has(i.str));
   const rowMap={};
   below.forEach(it=>{
@@ -118,9 +138,10 @@ function parseEXFOEvents(content){
     });
     const ns=(a['Nº']||'').trim();
     if(!/^\d+$/.test(ns)) return;
+    const rawDist=parseFrNum(a['Pos./Long.']);
     evts.push({
       num:parseInt(ns,10),
-      distance:parseFrNum(a['Pos./Long.']),
+      distance:rawDist!==null&&inMeters ? rawDist/1000 : rawDist,
       affaib:parseFrNum(a['Perte']),
       reflect:parseFrNum(a['Réflectance']),
       pente:parseFrNum(a['Atténuation']),
