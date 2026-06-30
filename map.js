@@ -42,7 +42,7 @@ function measureCardHTML(m){
       <span class="badge ${nAnom>0?'fault':'ok'}">${nAnom>0?nAnom+' évt(s)':'OK'}</span>
     </div>
     <div class="row"><span class="sub">Fibre ${m.fibre||'—'} · ${m.manualOrigine||m.origine||'?'} → ${m.manualExtremite||m.extremite||'?'}${m.manualOrigine?'<span style="font-size:9px;color:var(--fiber);margin-left:4px;">● manuel</span>':''}</span></div>
-    <div class="row"><span class="sub">Bilan ${fmtNum(m.bilanTotal,3)} dB · Longueur ${fmtLen(m.finFibre)}</span></div>
+    <div class="row"><span class="sub">Bilan ${fmtNum(m.bilanTotal,3)} dB · Longueur ${fmtLen(m.finFibre*1000)}</span></div>
   </div>`;
 }
 
@@ -148,7 +148,7 @@ function openMeasureDetail(m){
       +'<p class="sub">'+esc(m.name||'')+'</p>'
       +'<div class="kpi-grid">'
         +'<div class="kpi"><div class="v">'+esc(m.fibre||'&#8212;')+'</div><div class="l">Fibre</div></div>'
-        +'<div class="kpi"><div class="v">'+esc(fmtLen(m.finFibre))+'</div><div class="l">Longueur</div></div>'
+        +'<div class="kpi"><div class="v">'+esc(fmtLen(m.finFibre*1000))+'</div><div class="l">Longueur</div></div>'
         +'<div class="kpi"><div class="v">'+esc(fmtNum(m.bilanTotal,3))+'</div><div class="l">Bilan dB</div></div>'
         +'<div class="kpi"><div class="v">'+esc(fmtNum(m.orl,2))+'</div><div class="l">ORL dB</div></div>'
       +'</div>';
@@ -163,7 +163,7 @@ function openMeasureDetail(m){
       try{ anom=isAnomalyEvent(ev,m); }catch(e2){}
       evRows+='<tr class="event-row '+(anom?'fault':'')+'">'
         +'<td>'+esc(ev.num)+'</td>'
-        +'<td>'+esc(fmtLen(ev.distance))+'</td>'
+        +'<td>'+esc(fmtLen(ev.distance*1000))+'</td>'
         +'<td>'+(ev.affaib!=null?esc(fmtNum(ev.affaib,3)):'&#8212;')+'</td>'
         +'<td>'+(ev.reflect!=null?esc(fmtNum(ev.reflect,2)):'&#8212;')+'</td>'
         +'<td>'+(ev.pente!=null?esc(fmtNum(ev.pente,3)):'&#8212;')+'</td>'
@@ -219,20 +219,20 @@ function renderCorrelationResult(result,measure){
   const roadNote=result.mode==='road'?`<p class="sub" style="margin-top:4px;">Itinéraire calculé par OSRM (voiture). ${exclLabel}. Chaque événement est placé à sa distance exacte mesurée (OTDR), en suivant cet itinéraire depuis l'origine.</p>`:'';
   const gapWarning=(result.mode==='chain'&&result.gapPct!=null&&result.gapPct>15)
     ?`<div class="row" style="color:var(--fault);"><span class="sub">⚠ Écart important</span><strong>${result.gapPct.toFixed(0)}%</strong></div>
-       <p class="sub" style="color:var(--fault);margin-top:4px;">Le tracé trouvé (${fmtLen(result.total)}) diffère beaucoup de la longueur mesurée OTDR (${fmtLen(result.measureLen)}). Les événements proches de l'extrémité peuvent être mal placés.</p>`:'';
+       <p class="sub" style="color:var(--fault);margin-top:4px;">Le tracé trouvé (${fmtLen(result.total)}) diffère beaucoup de la longueur mesurée OTDR (${fmtLen(result.measureLen*1000)}). Les événements proches de l'extrémité peuvent être mal placés.</p>`:'';
   div.innerHTML=`
     <div class="card" style="margin-top:8px;">
       <div class="row"><span class="sub">${esc(result.originName)} → ${esc(result.destName)}</span></div>
       <div class="row"><span class="sub">Mode</span><strong>${modeLabel}</strong></div>
       <div class="row"><span class="sub">Longueur tracé</span><strong>${fmtLen(result.total)}</strong></div>
-      ${result.measureLen?`<div class="row"><span class="sub">Longueur mesurée (OTDR)</span><strong>${fmtLen(result.measureLen)}</strong></div>`:''}
+      ${result.measureLen?`<div class="row"><span class="sub">Longueur mesurée (OTDR)</span><strong>${fmtLen(result.measureLen*1000)}</strong></div>`:''}
       ${roadNote}${gapWarning}
     </div>
     <div class="tablewrap" style="margin-top:8px;"><table><thead><tr><th>#</th><th>Distance</th><th>Lat</th><th>Lon</th><th></th></tr></thead><tbody>
     ${(result.events||[]).map(ev=>{
       const anom=isAnomalyEvent(ev,measure);
       return `<tr class="event-row ${anom?'fault':''}">
-        <td>${ev.num}</td><td>${fmtLen(ev.distance)}</td>
+        <td>${ev.num}</td><td>${fmtLen(ev.distance*1000)}</td>
         <td>${ev.pos?ev.pos[0].toFixed(5):'—'}</td>
         <td>${ev.pos?ev.pos[1].toFixed(5):'—'}</td>
         <td>${ev.pos?`<button class="btn small secondary" onclick="navigateTo(${ev.pos[0]},${ev.pos[1]})">🧭</button>`:''}</td>
@@ -393,7 +393,7 @@ function renderMap(){
       if(!ev.pos) return;
       const anom=measure?isAnomalyEvent(ev,measure):false;
       L.circleMarker(ev.pos,{radius:7,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
-        .bindPopup(`<b>${measure?.cable||measure?.name||''}</b><br>Événement #${ev.num} — ${fmtLen(ev.distance)}<br>${anom?'<span style="color:#ff5d5d">À vérifier</span><br>':''}<a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
+        .bindPopup(`<b>${measure?.cable||measure?.name||''}</b><br>Événement #${ev.num} — ${fmtLen(ev.distance*1000)}<br>${anom?'<span style="color:#ff5d5d">À vérifier</span><br>':''}<a href="https://www.google.com/maps/dir/?api=1&destination=${ev.pos[0]},${ev.pos[1]}" target="_blank">Naviguer</a>`)
         .addTo(AppState.layers.events);
     });
   });
@@ -432,7 +432,7 @@ function drawCorrelationLayer(){
     let anom=false;
     try{ anom=isAnomalyEvent(ev,measure); }catch(e){}
     all.push(ev.pos);
-    const popup='<b>#'+ev.num+'</b> — '+fmtLen(ev.distance)
+    const popup='<b>#'+ev.num+'</b> — '+fmtLen(ev.distance*1000)
       +(anom?'<br><span style="color:#ff5d5d">⚠ Anomalie</span>':'')
       +'<br><button class="btn small secondary" onclick="navigateTo('+ev.pos[0]+','+ev.pos[1]+')">🧭 Itinéraire</button>';
     L.circleMarker(ev.pos,{radius:anom?8:5,color:anom?'#ff5d5d':'#39d98a',fillColor:anom?'#ff5d5d':'#39d98a',fillOpacity:.95,weight:2})
