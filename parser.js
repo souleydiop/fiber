@@ -87,18 +87,30 @@ function parseEXFOEvents(content){
   const colX={};
   bestG.forEach(h=>{ colX[normKey(h.str)]=h.x; });
 
-  // Détecter unité depuis Pos./Long. (m) ou Pos./Long. (km)
-  // Cas 1 : unité dans le même item  → extraire depuis bestG
-  // Cas 2 : item séparé (m)/(km) sous l'en-tête → fallback Y-range
+  // Détecter l'unité de Pos./Long. par ancrage (x,y), pas par recherche
+  // textuelle globale : Pos./Long. et son unité (m)/(km) sont deux objets
+  // PDF distincts, sur deux lignes, alignés en x sous le même en-tête.
   const posItem=bestG.find(h=>h.str.startsWith('Pos./'));
   let inMeters=false;
-  if(posItem&&/\(m\)|\(km\)/.test(posItem.str)){
-    inMeters=/\(m\)/.test(posItem.str)&&!/\(km\)/.test(posItem.str);
-  } else {
-    const unitTokens=items
-      .filter(i=>i.y>=headerY-25&&i.y<headerY-1&&(i.str==='(m)'||i.str==='(km)'))
-      .sort((a,b)=>a.x-b.x);
-    inMeters=unitTokens.length>0&&unitTokens[0].str==='(m)';
+  if(posItem){
+    if(/\(m\)|\(km\)/.test(posItem.str)){
+      // unité accolée au même item (rare mais possible)
+      inMeters=/\(m\)/.test(posItem.str)&&!/\(km\)/.test(posItem.str);
+    } else {
+      // unité = objet PDF séparé : on cherche le token le plus proche
+      // de (posItem.x, posItem.y) parmi tous les candidats (m)/(km)
+      const candidates=items.filter(i=>
+        (i.str==='(m)'||i.str==='(km)')&&
+        i.y<posItem.y&&i.y>=posItem.y-25&&          // juste en dessous
+        Math.abs(i.x-posItem.x)<60                  // même colonne
+      );
+      if(candidates.length){
+        candidates.sort((a,b)=>
+          Math.hypot(a.x-posItem.x,a.y-posItem.y)-Math.hypot(b.x-posItem.x,b.y-posItem.y)
+        );
+        inMeters=candidates[0].str==='(m)';
+      }
+    }
   }
 
   const COL_ORDER=['Type','Nº','Pos./Long.','Perte','Réflectance','Atténuation','Cumulé'];
