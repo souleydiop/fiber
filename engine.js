@@ -398,12 +398,14 @@ async function correlateLinear(measure){
     if(!oGPS) return {error:`Site introuvable : "${oName}"\n→ Charge base_site.kmz et vérifie le nom.`};
     if(!dGPS) return {error:`Site introuvable : "${dName}"\n→ Charge base_site.kmz et vérifie le nom.`};
 
-    // parser.js stocke events[].distance et finFibre en KM ; tout le moteur
-    // de corrélation (section.length, OSRM, haversine) travaille en MÈTRES.
-    // On convertit une fois ici pour les calculs internes — measureLen
-    // reste en km dans les objets retournés (map.js fait déjà *1000 à l'affichage).
-    const eventsM=(measure.events||[]).map(ev=>({...ev,distance:(ev.distance||0)*1000}));
-    const finFibreM=measure.finFibre!=null?measure.finFibre*1000:null;
+    // parser.js stocke distances en KM (EXFO) ou MÈTRES (Viavi).
+    // Le moteur interne travaille toujours en MÈTRES.
+    // On normalise une fois ici selon distanceUnit.
+    const isKm=(measure.distanceUnit==='km');
+    const finFibreKm=measure.finFibre!=null?(isKm?measure.finFibre:measure.finFibre/1000):null;
+    const toM=v=>v==null?null:isKm?v*1000:v;
+    const eventsM=(measure.events||[]).map(ev=>({...ev,distance:toM(ev.distance||0)}));
+    const finFibreM=toM(measure.finFibre);
 
     if(measure.manualWaypoints&&measure.manualWaypoints.length){
       try{
@@ -413,7 +415,7 @@ async function correlateLinear(measure){
         if(r&&r.coords&&r.coords.length>1&&r.distance>0){
           return {routeCoords:r.coords,events:placeEventsOnRoute(r.coords,eventsM),
             originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,
-            total:r.distance,measureLen:measure.finFibre,excludeUsed:'waypoints_manuels',mode:'road'};
+            total:r.distance,measureLen:finFibreKm,excludeUsed:'waypoints_manuels',mode:'road'};
         }
       }catch(e){ console.error('Itinéraire par waypoints manuels a échoué:',e); }
     }
@@ -426,7 +428,7 @@ async function correlateLinear(measure){
         const gapPct=finFibreM?Math.abs(total-finFibreM)/finFibreM*100:null;
         return {chain,events:placeEventsOnChain(chain,eventsM),
           originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,
-          total,measureLen:measure.finFibre,gapPct,mode:'chain'};
+          total,measureLen:finFibreKm,gapPct,mode:'chain'};
       }
     }
 
@@ -434,7 +436,7 @@ async function correlateLinear(measure){
     if(road&&road.coords&&road.coords.length>1&&road.distance>0){
       return {routeCoords:road.coords,events:placeEventsOnRoute(road.coords,eventsM),
         originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,
-        total:road.distance,measureLen:measure.finFibre,excludeUsed:road.excludeUsed,mode:'road'};
+        total:road.distance,measureLen:finFibreKm,excludeUsed:road.excludeUsed,mode:'road'};
     }
 
     const total=finFibreM||haversine(oGPS[0],oGPS[1],dGPS[0],dGPS[1]);
@@ -442,7 +444,7 @@ async function correlateLinear(measure){
       const r=total>0?Math.min(1,Math.max(0,ev.distance/total)):0;
       return {...ev,pos:[oGPS[0]+(dGPS[0]-oGPS[0])*r,oGPS[1]+(dGPS[1]-oGPS[1])*r]};
     });
-    return {events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,measureLen:measure.finFibre,mode:'linear'};
+    return {events,originName:oName,destName:dName,originGPS:oGPS,destGPS:dGPS,total,measureLen:finFibreKm,mode:'linear'};
   }catch(e){
     console.error('correlateLinear a échoué:',e);
     return {error:'Erreur de calcul : '+e.message};

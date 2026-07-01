@@ -48,7 +48,7 @@ function parseEXFOMeta(text){
   // bilanTotal / orl : gérer virgule ET point décimal
   const bilanTotal=parseFrNum(get(/Perte de la section\s*:\s*([\d,.]+)\s*dB/));
   const orl=parseFrNum(get(/ORL de la section\s*:\s*<?(-?[\d,.]+)\s*dB/));
-  return {cable,fibre,origine,extremite,finFibre,bilanTotal,orl,hasMeta:!!(cable||origine||finFibre)};
+  return {cable,fibre,origine,extremite,finFibre,bilanTotal,orl,distanceUnit:'km',hasMeta:!!(cable||origine||finFibre)};
 }
 
 function parseEXFOEvents(content){
@@ -227,7 +227,7 @@ function parsePDFPage(content){
     });
     let bestG=[];
     Object.values(yG).forEach(g=>{ if(g.length>bestG.length) bestG=g; });
-    if(bestG.length<3) return {cable,fibre,origine,extremite,laser,bilanTotal,orl,finFibre,nbEvt,events,rawText:text};
+    if(bestG.length<3) return {cable,fibre,origine,extremite,laser,bilanTotal,orl,finFibre,nbEvt,distanceUnit:'m',events,rawText:text};
     const headerY=bestG[0].y;
     const colX={};
     bestG.forEach(h=>{ colX[h.str]=h.x; });
@@ -267,7 +267,7 @@ function parsePDFPage(content){
       }
     });
   }
-  return {cable,fibre,origine,extremite,laser,bilanTotal,orl,finFibre,nbEvt,events,rawText:text};
+  return {cable,fibre,origine,extremite,laser,bilanTotal,orl,finFibre,nbEvt,distanceUnit:'m',events,rawText:text};
 }
 
 async function parsePDF(arrayBuffer){
