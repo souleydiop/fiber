@@ -1,15 +1,94 @@
 {
   "name": "OSP Manager",
-  "short_name": "OSP Manager",
-  "description": "Gestion et analyse OSP : mesures OTDR, plans optiques KML/KMZ, corrélation de pannes.",
-  "start_url": "./index.html",
-  "scope": "./",
+  "short_name": "OSP Mgr",
+  "description": "Gestion et analyse des infrastructures fibre optique : mesures OTDR, corrélation sur carte, localisation des pannes et suivi des sections optiques.",
+  "id": "/fiber/",
+  "start_url": "/fiber/",
+  "scope": "/fiber/",
   "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#0d1117",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
+  "orientation": "portrait-primary",
   "theme_color": "#0d1117",
+  "background_color": "#0d1117",
+  "lang": "fr",
+  "dir": "ltr",
+  "categories": [
+    "utilities",
+    "productivity",
+    "business"
+  ],
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
-  ]
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Tableau de bord OSP Manager"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Importer PDF OTDR",
+      "short_name": "Importer",
+      "description": "Importer un fichier PDF de mesures OTDR",
+      "url": "/fiber/#import",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Carte réseau",
+      "short_name": "Carte",
+      "description": "Afficher la carte des sections optiques",
+      "url": "/fiber/#carte",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Mesures OTDR",
+      "short_name": "Mesures",
+      "description": "Consulter les mesures OTDR importées",
+      "url": "/fiber/#mesures",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ],
+  "prefer_related_applications": false,
+  "related_applications": [],
+  "iarc_rating_id": "",
+  "handle_links": "preferred",
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "edge_side_panel": {
+    "preferred_width": 400
+  }
 }
