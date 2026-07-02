@@ -200,7 +200,12 @@ a.linklike{color:var(--signal);text-decoration:none;}
 
 <header class="app-header">
   <div class="logo"><span class="dot"></span> OSP MANAGER</div>
-  <div class="ctx" id="headerCtx">Aucun fichier actif</div>
+  <button id="btnHelp" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:6px;display:flex;align-items:center;" title="Aide & instructions">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>
+      <path d="M12 1v3M12 20v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M1 12h3M20 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/>
+    </svg>
+  </button>
 </header>
 
 <main>
@@ -330,6 +335,88 @@ a.linklike{color:var(--signal);text-decoration:none;}
     <div id="detailContent"></div>
   </div>
 </div>
+
+<!-- HELP MODAL -->
+<div class="section-detail-overlay" id="helpOverlay" style="z-index:1100;">
+  <div class="sheet" style="max-height:90vh;">
+    <div class="sheet-handle"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <h1 style="margin:0;">Guide d'utilisation</h1>
+      <button id="btnHelpClose" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;">✕</button>
+    </div>
+
+    <h2>📥 Importer des fichiers</h2>
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub"><strong style="color:var(--warn);">PDF OTDR Viavi / EXFO</strong><br>
+      Formats .pdf avec rapports OTDR. Le parser détecte automatiquement Viavi (SOR) et EXFO.<br>
+      → Onglet <strong>Mesures</strong> · multi-fichiers acceptés.</p>
+    </div>
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub"><strong style="color:var(--fiber);">KML / KMZ — Tracé fibre</strong><br>
+      Exporter depuis Google Earth ou QGIS. Les sections (LineString) forment le réseau.<br>
+      → Onglet <strong>Sections</strong> une fois importé.</p>
+    </div>
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub"><strong style="color:var(--fiber);">KMZ — Base sites (BTS/POP)</strong><br>
+      Placemark avec coordonnées GPS. Noms identiques aux champs Origine/Extrémité des PDF.<br>
+      → Utilisé pour la corrélation automatique.</p>
+    </div>
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub"><strong style="color:var(--signal);">Excel (.xlsx / .xls)</strong><br>
+      Inventaire de ports fibre avec distances optiques et dégradations.<br>
+      → Colonnes : Port, Distance Optique (Km), état FO, points de dégradation.</p>
+    </div>
+
+    <h2>🗺️ Corrélation OTDR → Carte</h2>
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub">1. Importe un PDF OTDR + un KMZ Sites + un KML Tracé.<br>
+      2. Onglet <strong>Mesures</strong> → sélectionne une mesure.<br>
+      3. Renseigne <strong>Origine</strong> et <strong>Extrémité</strong> (noms des sites).<br>
+      4. Appuie sur <strong>Corréler</strong> → les événements OTDR sont placés sur le tracé.<br>
+      5. Les points rouges = anomalies à vérifier sur le terrain.</p>
+    </div>
+
+    <h2>📍 Sonde de distance</h2>
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub">Depuis la carte, appuie sur un point du tracé pour mesurer la distance optique depuis l'origine.<br>
+      Utile pour localiser un événement OTDR physiquement sur le câble.</p>
+    </div>
+
+    <h2>🔍 Recherche de site</h2>
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub">Carte → bouton <strong>🔍 Site</strong> → tape le nom d'un site BTS/POP pour centrer la carte dessus.</p>
+    </div>
+
+    <h2>📏 Waypoints manuels</h2>
+    <div class="card" style="margin-bottom:8px;">
+      <p class="sub">Si la corrélation automatique échoue (tracé non disponible), ajoute des waypoints manuels pour guider l'itinéraire.<br>
+      → Bouton <strong>+ Waypoint</strong> dans le détail d'une mesure.</p>
+    </div>
+
+    <h2>⚠️ Lecture des événements</h2>
+    <div class="card" style="margin-bottom:24px;">
+      <p class="sub">
+      <strong style="color:var(--fault);">Rouge</strong> = perte d'épissure ou réflectance hors seuil.<br>
+      <strong style="color:var(--text);">Distance</strong> = position depuis l'origine du câble.<br>
+      <strong>AFF.</strong> = affaiblissement (dB) · <strong>RÉFL.</strong> = réflectance (dB)<br>
+      <strong>BILAN</strong> = perte cumulée depuis le départ.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.getElementById('btnHelp').addEventListener('click',()=>{
+    document.getElementById('helpOverlay').classList.add('active');
+  });
+  document.getElementById('btnHelpClose').addEventListener('click',()=>{
+    document.getElementById('helpOverlay').classList.remove('active');
+  });
+  document.getElementById('helpOverlay').addEventListener('click',e=>{
+    if(e.target===document.getElementById('helpOverlay'))
+      document.getElementById('helpOverlay').classList.remove('active');
+  });
+</script>
 
 <div class="toast" id="toast"></div>
 
