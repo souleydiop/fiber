@@ -432,6 +432,7 @@ function toggleLocate(){
     showToast('GPS : '+(msg[err.code]||err.message));
   },{enableHighAccuracy:true,timeout:15000,maximumAge:5000});
   AppState._locateFirst=false;
+}
 
 function renderMap(){
   AppState.siteMarkers={};
