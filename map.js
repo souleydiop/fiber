@@ -362,7 +362,76 @@ function initMap(){
     }
   });
   new ProbeCtrl().addTo(AppState.map);
+
+  // Bouton 📍 — position temps réel
+  const LocCtrl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() {
+      const btn = L.DomUtil.create('button');
+      btn.id = 'btnLocate';
+      btn.innerHTML = '📍';
+      btn.title = 'Ma position';
+      btn.style.cssText = 'width:36px;height:36px;font-size:18px;cursor:pointer;'
+        + 'background:var(--surface,#1e1e2e);color:var(--text,#fff);'
+        + 'border:1px solid var(--border,#333);border-radius:8px;margin-top:4px;';
+      L.DomEvent.disableClickPropagation(btn);
+      btn.addEventListener('click', toggleLocate);
+      return btn;
+    }
+  });
+  new LocCtrl().addTo(AppState.map);
+
+  // Layer position
+  AppState.layers.locate = L.layerGroup().addTo(AppState.map);
+  AppState._locateWatchId = null;
+  AppState._locateMarker  = null;
+  AppState._locateCircle  = null;
 }
+
+let _locateActive = false;
+function toggleLocate(){
+  const btn = document.getElementById('btnLocate');
+  if(_locateActive){
+    // Arrêter
+    if(AppState._locateWatchId!=null) navigator.geolocation.clearWatch(AppState._locateWatchId);
+    AppState._locateWatchId=null;
+    AppState.layers.locate.clearLayers();
+    AppState._locateMarker=null;
+    AppState._locateCircle=null;
+    _locateActive=false;
+    if(btn){ btn.style.background='var(--surface,#1e1e2e)'; btn.style.color='var(--text,#fff)'; }
+    return;
+  }
+  if(!navigator.geolocation){ showToast('Géolocalisation non supportée'); return; }
+  _locateActive=true;
+  if(btn){ btn.style.background='#2563eb'; btn.style.color='#fff'; }
+  AppState._locateWatchId = navigator.geolocation.watchPosition(pos=>{
+    const {latitude:lat,longitude:lng,accuracy:acc}=pos.coords;
+    AppState.layers.locate.clearLayers();
+    // Cercle de précision
+    AppState._locateCircle = L.circle([lat,lng],{
+      radius:acc, color:'#2563eb', fillColor:'#2563eb',
+      fillOpacity:.1, weight:1
+    }).addTo(AppState.layers.locate);
+    // Marqueur position
+    AppState._locateMarker = L.circleMarker([lat,lng],{
+      radius:8, color:'#fff', fillColor:'#2563eb',
+      fillOpacity:1, weight:2
+    }).bindPopup(`<b>Ma position</b><br>Précision : ${Math.round(acc)} m<br>${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+      .addTo(AppState.layers.locate);
+    // Centrer seulement au premier fix
+    if(!AppState._locateFirst){
+      AppState.map.setView([lat,lng], Math.max(AppState.map.getZoom(),14));
+      AppState._locateFirst=true;
+    }
+  }, err=>{
+    _locateActive=false;
+    if(btn){ btn.style.background='var(--surface,#1e1e2e)'; btn.style.color='var(--text,#fff)'; }
+    AppState._locateFirst=false;
+    const msg={1:'Accès refusé',2:'Position indisponible',3:'Délai dépassé'};
+    showToast('GPS : '+(msg[err.code]||err.message));
+  },{enableHighAccuracy:true,timeout:15000,maximumAge:5000});
+  AppState._locateFirst=false;
 
 function renderMap(){
   AppState.siteMarkers={};
@@ -511,20 +580,6 @@ function getPosAtDistance(result, distM){
   return null;
 }
 
-/** Affiche l'unité auto-détectée pendant la saisie */
-function detectProbeUnit(){
-  const raw=(document.getElementById('probeDist').value||'').trim();
-  const el=document.getElementById('probeUnitDetect');
-  if(!el) return;
-  const v=parseFloat(raw);
-  if(!raw||isNaN(v)||v<=0){ el.textContent=''; return; }
-  if(raw.includes('.')||v<100){
-    el.textContent=`→ ${v} km = ${(v*1000).toFixed(0)} m`;
-  } else {
-    el.textContent=`→ ${v} m`;
-  }
-}
-
 function toggleDistanceProbe(){
   switchView('carte');
   const panel=document.getElementById('distanceProbePanel');
@@ -585,13 +640,13 @@ async function traceAndLocate(){
   const oName =(document.getElementById('probeOrigine').value||'').trim();
   const dName =(document.getElementById('probeExtremite').value||'').trim();
   const raw   =(document.getElementById('probeDist').value||'').trim();
+  const unit  =(document.getElementById('probeUnit').value||'m');
   const res   = document.getElementById('probeResult');
 
   if(!oName||!dName||!raw){ res.innerHTML='<p class="sub" style="color:var(--fault);">Remplis les 3 champs.</p>'; return; }
   let distM=parseFloat(raw);
   if(isNaN(distM)||distM<0){ res.innerHTML='<p class="sub" style="color:var(--fault);">Distance invalide.</p>'; return; }
-  // Auto-détection : décimal OU valeur < 100 → km → convertir en m
-  if(raw.includes('.')||distM<100) distM*=1000;
+  if(unit==='km') distM*=1000;
 
   res.innerHTML='<p class="sub">⏳ Calcul de l\'itinéraire…</p>';
 
@@ -682,15 +737,7 @@ function switchView(name){
   if(name==='carte') setTimeout(()=>{ initMap(); renderMap(); AppState.map.invalidateSize(); },50);
 }
 function updateHeader(){
-  const el=document.getElementById('headerCtx');
-  if(AppState.measures.length){
-    const m=AppState.measures[AppState.measures.length-1];
-    el.textContent=(m.cable||m.name)+' · '+AppState.sections.length+' sections';
-  } else if(AppState.sections.length){
-    el.textContent=AppState.sections.length+' sections chargées';
-  } else {
-    el.textContent='Aucun fichier actif';
-  }
+  // headerCtx supprimé du DOM
 }
 function renderAll(){
   renderAccueil(); renderMesures();
@@ -759,16 +806,20 @@ window.addEventListener('DOMContentLoaded',async()=>{
       <input id="probeExtremite" list="probeSiteList" placeholder="Nom du site B" autocomplete="off"
         style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;">
     </div>
-    <div style="margin-bottom:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
-        <label class="sub">Distance d'arrêt</label>
-        <span id="probeUnitDetect" style="font-size:11px;color:var(--fiber,#4ad7ff);"></span>
+    <div style="margin-bottom:12px;display:flex;gap:8px;">
+      <div style="flex:1;">
+        <label class="sub" style="display:block;margin-bottom:4px;">Distance d'arrêt</label>
+        <input id="probeDist" type="number" min="0" step="0.001" placeholder="ex: 8500"
+          style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;"
+          onkeydown="if(event.key==='Enter') traceAndLocate();">
       </div>
-      <input id="probeDist" type="number" min="0" step="any"
-        placeholder="ex: 8500 (m) ou 8.5 (km auto-détecté)"
-        style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 12px;font-size:13px;box-sizing:border-box;"
-        oninput="detectProbeUnit()"
-        onkeydown="if(event.key==='Enter') traceAndLocate();">
+      <div style="width:70px;">
+        <label class="sub" style="display:block;margin-bottom:4px;">Unité</label>
+        <select id="probeUnit" style="width:100%;background:var(--surface2,#2a2a3e);border:1px solid var(--border,#333);color:var(--text,#fff);border-radius:8px;padding:9px 8px;font-size:13px;">
+          <option value="m">m</option>
+          <option value="km">km</option>
+        </select>
+      </div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding:8px;background:var(--surface2,#2a2a3e);border-radius:8px;">
       <span id="probeWpCount" class="sub">Aucun point de passage</span>
@@ -847,7 +898,6 @@ window.redrawWaypointEdit    = redrawWaypointEdit;
 window.attachWaypointMapClick= attachWaypointMapClick;
 window.detachWaypointMapClick= detachWaypointMapClick;
 window.exitWaypointEditor    = exitWaypointEditor;
-window.toggleDistanceProbe    = toggleDistanceProbe;
-window.traceAndLocate         = traceAndLocate;
-window.openProbeWaypointEditor= openProbeWaypointEditor;
-window.detectProbeUnit        = detectProbeUnit;
+window.toggleDistanceProbe   = toggleDistanceProbe;
+window.traceAndLocate        = traceAndLocate;
+window.openProbeWaypointEditor=openProbeWaypointEditor;
