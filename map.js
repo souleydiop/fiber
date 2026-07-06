@@ -376,11 +376,11 @@ function renderMap(){
   AppState.points.forEach(p=>{
     const navBtn=`<button class="btn small secondary" style="margin-top:6px;" onclick="navigateTo(${p.lat},${p.lon})">🧭 Itinéraire</button>`;
     if(p.category==='bts'){
-      const marker=L.circleMarker([p.lat,p.lon],{radius:7,color:'#ffb454',fillColor:'#ffb454',fillOpacity:.85,weight:2})
+      const marker=L.circleMarker([p.lat,p.lon],{radius:3,color:'#ffb454',fillColor:'#ffb454',fillOpacity:.8,weight:1})
         .bindPopup(`<b>${p.name}</b><br>${navBtn}`).addTo(AppState.layers.sites);
       AppState.siteMarkers[p.name]=marker;
     } else if(p.category==='joint'||p.category==='chamber'){
-      L.circleMarker([p.lat,p.lon],{radius:5,color:'#c98bff',fillColor:'#c98bff',fillOpacity:.9,weight:1.5})
+      L.circleMarker([p.lat,p.lon],{radius:4,color:'#c98bff',fillColor:'#c98bff',fillOpacity:.9,weight:1})
         .bindPopup(`<b>${p.name}</b><br>${p.category==='joint'?'Joint':'Chambre'}<br>${navBtn}`)
         .addTo(AppState.layers.joints);
     }
@@ -824,7 +824,18 @@ window.addEventListener('DOMContentLoaded',async()=>{
   });
   await window.loadAll();
   renderAll();
-  if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+  if('serviceWorker' in navigator){
+    let refreshing=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(refreshing) return;
+      refreshing=true;
+      window.location.reload();
+    });
+    navigator.serviceWorker.register('sw.js').then(reg=>{
+      reg.update();
+      setInterval(()=>reg.update(),60*60*1000);
+    }).catch(()=>{});
+  }
 });
 
 /* ================================================================
