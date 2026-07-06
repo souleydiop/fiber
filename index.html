@@ -95,8 +95,20 @@ tr.event-row.fault td{color:var(--fault);}
 }
 
 #map{position:absolute;inset:0;background:#0a0e13;}
+.map-tabs{
+  position:absolute;top:0;left:0;right:0;z-index:500;
+  display:flex;gap:4px;padding:6px 8px;
+  background:var(--surface);border-bottom:1px solid var(--border);
+  overflow-x:auto;-webkit-overflow-scrolling:touch;
+}
+.map-tabs button{
+  flex-shrink:0;background:var(--surface2);border:1px solid var(--border);color:var(--text);
+  border-radius:6px;padding:5px 8px;font-size:10px;font-weight:600;
+  display:flex;align-items:center;gap:4px;white-space:nowrap;
+}
+.map-tabs button.on{border-color:var(--signal);color:var(--signal);}
 .map-controls{
-  position:absolute;top:10px;right:10px;z-index:500;
+  position:absolute;top:46px;right:10px;z-index:500;
   display:flex;flex-direction:column;gap:6px;
 }
 .map-controls button{
@@ -106,7 +118,7 @@ tr.event-row.fault td{color:var(--fault);}
 }
 .map-controls button.on{border-color:var(--signal);color:var(--signal);}
 .waypoint-banner{
-  position:absolute;top:10px;left:10px;right:10px;z-index:600;
+  position:absolute;top:46px;left:10px;right:10px;z-index:600;
   background:var(--surface);border:1px solid var(--signal);border-radius:10px;
   padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;
   box-shadow:0 4px 14px rgba(0,0,0,.4);
@@ -130,7 +142,7 @@ tr.event-row.fault td{color:var(--fault);}
   display:flex;align-items:center;gap:6px;
 }
 .map-search{
-  position:absolute;top:10px;left:10px;right:104px;z-index:550;
+  position:absolute;top:46px;left:10px;right:104px;z-index:550;
   display:flex;gap:6px;
 }
 .map-search input{
@@ -275,12 +287,14 @@ a.linklike{color:var(--signal);text-decoration:none;}
     </div>
     <div class="waypoint-crosshair" id="waypointCrosshair" style="display:none;">＋</div>
     <button class="waypoint-add-btn" id="btnWaypointAdd" style="display:none;">+ Ajouter ici</button>
-    <div class="map-controls">
-      <button id="btnSearchSite">🔍 Site</button>
+    <div class="map-tabs">
       <button id="layerSections" class="on">⎯ Sections</button>
       <button id="layerSites">● Sites</button>
       <button id="layerJoints">◆ Joints</button>
       <button id="layerEvents">⚠ Événements</button>
+    </div>
+    <div class="map-controls">
+      <button id="btnSearchSite">🔍 Site</button>
       <button id="btnFitAll">⤢ Centrer</button>
     </div>
     <div class="map-legend">
