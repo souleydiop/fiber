@@ -340,7 +340,14 @@ function initMap(){
   L.control.zoom({position:'bottomright'}).addTo(AppState.map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(AppState.map);
   AppState.layers.sections    = L.layerGroup().addTo(AppState.map);
-  AppState.layers.sites       = L.layerGroup();
+  AppState.layers.sites       = L.markerClusterGroup({
+    disableClusteringAtZoom: 15,
+    maxClusterRadius: 60,
+    spiderfyOnMaxZoom: false,
+    chunkedLoading: true,      // découpe l'ajout des marqueurs en lots → évite de geler l'onglet
+    chunkInterval: 50,
+    chunkDelay: 10
+  });
   AppState.layers.joints      = L.layerGroup();
   AppState.layers.events      = L.layerGroup().addTo(AppState.map);
   AppState.layers.correlation = L.layerGroup().addTo(AppState.map);
@@ -384,13 +391,14 @@ function renderMap(){
       .bindPopup(`<b>${s.endA||'?'} ↔ ${s.endB||'?'}</b><br>${fmtLen(s.length)}<br>${s.type||''}`)
       .addTo(AppState.layers.sections);
   });
+  const siteMarkersToAdd=[];
   AppState.points.forEach(p=>{
     const navBtn=`<button class="btn small secondary" style="margin-top:6px;" onclick="navigateTo(${p.lat},${p.lon})">🧭 Itinéraire</button>`;
     if(p.category==='bts'){
       const marker=L.circleMarker([p.lat,p.lon],{radius:7,color:'#ffb454',fillColor:'#ffb454',fillOpacity:.85,weight:2})
         .bindPopup(`<b>${p.name}</b><br>${navBtn}`)
-        .bindTooltip(p.name,{permanent:true,direction:'top',offset:[0,-6],className:'site-label'})
-        .addTo(AppState.layers.sites);
+        .bindTooltip(p.name,{permanent:true,direction:'top',offset:[0,-6],className:'site-label'});
+      siteMarkersToAdd.push(marker);
       AppState.siteMarkers[p.name]=marker;
     } else if(p.category==='joint'||p.category==='chamber'){
       L.circleMarker([p.lat,p.lon],{radius:5,color:'#c98bff',fillColor:'#c98bff',fillOpacity:.9,weight:1.5})
@@ -398,6 +406,7 @@ function renderMap(){
         .addTo(AppState.layers.joints);
     }
   });
+  AppState.layers.sites.addLayers(siteMarkersToAdd);
   updateSiteSearchList();
   Object.entries(AppState.correlations||{}).forEach(([recId,result])=>{
     if(!result||result.error) return;
@@ -732,7 +741,10 @@ function searchSite(){
   if(sitesLayer&&!sitesLayer._map){sitesLayer.addTo(AppState.map);document.getElementById('layerSites').classList.add('on');}
   AppState.map.setView([found.lat,found.lon],16,{animate:true});
   const marker=AppState.siteMarkers[found.name];
-  if(marker) marker.openPopup();
+  if(marker){
+    if(typeof sitesLayer.zoomToShowLayer==='function') sitesLayer.zoomToShowLayer(marker,()=>marker.openPopup());
+    else marker.openPopup();
+  }
   toast('📍 '+found.name);
 }
 function toggleMapSearch(){
