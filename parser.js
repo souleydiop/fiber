@@ -438,6 +438,7 @@ function parseKML(text,sourceName,sourceType){
       if(styleUrl==='#Site Style'||sourceType==='bts') category='bts';
       else if(/\sJ\d+$/.test(name)) category='joint';
       else if(/_[A-Z]_\d+$/.test(name)) category='chamber';
+      else if(!doc.getElementsByTagName('LineString').length) category='bts';
       points.push({id:sourceName+'_P'+points.length,name,lat,lon,category,source:sourceName});
     } else if(polygon){
       const meta=parseDesc(pm);
