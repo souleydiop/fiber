@@ -1,0 +1,10 @@
+{
+  "name": "osp-manager",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OSP Manager — gestion et corrélation GPS de mesures OTDR fibre optique",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}
