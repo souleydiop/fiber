@@ -354,23 +354,6 @@ function initMap(){
   AppState.layers.waypointEdit= L.layerGroup().addTo(AppState.map);
   AppState.layers.probe       = L.layerGroup().addTo(AppState.map);
 
-  // Bouton 📏 flottant sur la carte → ouvre l'outil de localisation par distance
-  const ProbeCtrl = L.Control.extend({
-    options: { position: 'topright' },
-    onAdd() {
-      const btn = L.DomUtil.create('button');
-      btn.innerHTML = '📏';
-      btn.title = 'Localiser une distance';
-      btn.style.cssText = 'width:36px;height:36px;font-size:18px;cursor:pointer;'
-        + 'background:var(--surface,#1e1e2e);color:var(--text,#fff);'
-        + 'border:1px solid var(--border,#333);border-radius:8px;';
-      L.DomEvent.disableClickPropagation(btn);
-      btn.addEventListener('click', toggleDistanceProbe);
-      return btn;
-    }
-  });
-  new ProbeCtrl().addTo(AppState.map);
-
   // Étiquettes de noms de sites : visibles seulement à partir d'un certain zoom
   // (évite un fouillis illisible en vue large avec beaucoup de sites proches).
   const updateSiteLabelVisibility=()=>{
@@ -821,6 +804,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
     if(e.target.id==='detailOverlay') e.target.classList.remove('active');
   });
   document.getElementById('btnSearchSite').addEventListener('click',toggleMapSearch);
+  document.getElementById('btnDistanceProbe').addEventListener('click',toggleDistanceProbe);
   document.getElementById('mapSearchClose').addEventListener('click',()=>{
     document.getElementById('mapSearch').style.display='none';
     document.getElementById('mapSearchInput').value='';
