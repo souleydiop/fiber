@@ -690,9 +690,24 @@ function switchView(name){
     setTimeout(()=>AppState.map.invalidateSize(),350); // laisse le temps à la barre d'adresse mobile de se stabiliser
   },50);
 }
+window.addEventListener('orientationchange',()=>{
+  setTimeout(()=>{ if(AppState.map) AppState.map.invalidateSize(); },300);
+});
 window.addEventListener('resize',()=>{
   if(AppState.map) AppState.map.invalidateSize();
 });
+if(window.visualViewport){
+  // La barre d'adresse mobile (Chrome/Safari) qui se rétracte au scroll ne déclenche
+  // PAS window.resize — seulement visualViewport. Sans ça, Leaflet garde une taille
+  // de carte figée et laisse une bande noire non-rendue en bas de la carte.
+  let vvTimer=null;
+  const onVV=()=>{
+    clearTimeout(vvTimer);
+    vvTimer=setTimeout(()=>{ if(AppState.map) AppState.map.invalidateSize(); },80);
+  };
+  window.visualViewport.addEventListener('resize',onVV);
+  window.visualViewport.addEventListener('scroll',onVV);
+}
 function updateHeader(){
   const el=document.getElementById('headerCtx');
   if(AppState.measures.length){
