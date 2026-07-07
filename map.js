@@ -684,8 +684,15 @@ function switchView(name){
     const panel=document.getElementById('distanceProbePanel');
     if(panel) panel.style.display='none';
   }
-  if(name==='carte') setTimeout(()=>{ initMap(); renderMap(); AppState.map.invalidateSize(); },50);
+  if(name==='carte') setTimeout(()=>{
+    initMap(); renderMap();
+    AppState.map.invalidateSize();
+    setTimeout(()=>AppState.map.invalidateSize(),350); // laisse le temps à la barre d'adresse mobile de se stabiliser
+  },50);
 }
+window.addEventListener('resize',()=>{
+  if(AppState.map) AppState.map.invalidateSize();
+});
 function updateHeader(){
   const el=document.getElementById('headerCtx');
   if(AppState.measures.length){
