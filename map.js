@@ -334,14 +334,14 @@ function renderHistory(){
    CARTE LEAFLET
    ================================================================ */
 function initMap(){
-  const SITE_LABEL_MIN_ZOOM=9;
+  const SITE_LABEL_MIN_ZOOM=11;
   if(AppState.map) return;
   AppState.map=L.map('map',{preferCanvas:true,zoomControl:false}).setView([14.6,-15.2],8);
   L.control.zoom({position:'bottomright'}).addTo(AppState.map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(AppState.map);
   AppState.layers.sections    = L.layerGroup().addTo(AppState.map);
   AppState.layers.sites       = L.markerClusterGroup({
-    disableClusteringAtZoom: 9,
+    disableClusteringAtZoom: 11,
     maxClusterRadius: 60,
     spiderfyOnMaxZoom: false,
     chunkedLoading: true,      // découpe l'ajout des marqueurs en lots → évite de geler l'onglet
