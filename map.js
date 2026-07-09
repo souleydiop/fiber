@@ -353,6 +353,7 @@ function initMap(){
   AppState.layers.correlation = L.layerGroup().addTo(AppState.map);
   AppState.layers.waypointEdit= L.layerGroup().addTo(AppState.map);
   AppState.layers.probe       = L.layerGroup().addTo(AppState.map);
+  AppState.layers.userLocation= L.layerGroup().addTo(AppState.map);
 
   // Étiquettes de noms de sites : visibles seulement à partir d'un certain zoom
   // (évite un fouillis illisible en vue large avec beaucoup de sites proches).
@@ -530,6 +531,44 @@ function detectProbeUnit(){
   }
 }
 
+/* ================================================================
+   MA POSITION — suivi GPS en continu (watchPosition)
+   ================================================================ */
+let geoWatchId=null,userMarker=null,userAccuracyCircle=null;
+
+function toggleLocate(){
+  if(geoWatchId!==null){ stopLocate(); return; }
+  if(!navigator.geolocation){ toast('Géolocalisation non supportée par ce navigateur'); return; }
+  const btn=document.getElementById('btnLocate');
+  btn.classList.add('on');
+  toast('Localisation en cours…');
+  let firstFix=true;
+  geoWatchId=navigator.geolocation.watchPosition(pos=>{
+    const {latitude:lat,longitude:lon,accuracy}=pos.coords;
+    if(!userMarker){
+      userMarker=L.circleMarker([lat,lon],{radius:8,color:'#fff',weight:2,fillColor:'#4ad7ff',fillOpacity:1})
+        .addTo(AppState.layers.userLocation);
+      userAccuracyCircle=L.circle([lat,lon],{radius:accuracy,color:'#4ad7ff',weight:1,fillColor:'#4ad7ff',fillOpacity:.12})
+        .addTo(AppState.layers.userLocation);
+    } else {
+      userMarker.setLatLng([lat,lon]);
+      userAccuracyCircle.setLatLng([lat,lon]).setRadius(accuracy);
+    }
+    if(firstFix){ AppState.map.setView([lat,lon],16); firstFix=false; }
+  },err=>{
+    console.error('Géolocalisation:',err);
+    toast('Position indisponible : '+(err.message||'erreur inconnue'));
+    stopLocate();
+  },{enableHighAccuracy:true,maximumAge:5000,timeout:15000});
+}
+
+function stopLocate(){
+  if(geoWatchId!==null){ navigator.geolocation.clearWatch(geoWatchId); geoWatchId=null; }
+  if(userMarker){ AppState.layers.userLocation.clearLayers(); userMarker=null; userAccuracyCircle=null; }
+  const btn=document.getElementById('btnLocate');
+  if(btn) btn.classList.remove('on');
+}
+
 function toggleDistanceProbe(){
   switchView('carte');
   const panel=document.getElementById('distanceProbePanel');
@@ -683,6 +722,7 @@ function switchView(name){
     if(AppState.layers&&AppState.layers.probe) AppState.layers.probe.clearLayers();
     const panel=document.getElementById('distanceProbePanel');
     if(panel) panel.style.display='none';
+    stopLocate();
   }
   if(name==='carte') setTimeout(()=>{
     initMap(); renderMap();
@@ -853,6 +893,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
     AppState.points.forEach(p=>all.push([p.lat,p.lon]));
     if(all.length) AppState.map.fitBounds(L.latLngBounds(all),{padding:[30,30]});
   });
+  document.getElementById('btnLocate').addEventListener('click',toggleLocate);
   await window.loadAll();
   renderAll();
   if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
